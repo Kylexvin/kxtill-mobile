@@ -1,0 +1,354 @@
+// src/screens/dashboard/DashboardScreen.jsx
+//
+// Home tab. Renders the mobile dashboard from GET .../kxtill/mobile/dashboard.
+// Sections are shown only when the backend returns them (null = hidden).
+//
+// v3 — wiring fix:
+//   - Ownership is read from usePermissions().isOwner (same source as
+//     AccountScreen). The old isOwnerOrg(activeOrganization) check silently
+//     failed for owners because listOrganizations() does not include the
+//     permission set on the org object.
+//   - useDashboardScope no longer needs `data`; it only takes `isOwner`.
+//     `data.scope.isOrgWide` is merged in here once data lands, as a fallback
+//     for non-owner org-wide users.
+//   - Hook order: scope first (no data dep), data second (depends on scope).
+//     Scope change re-fetches automatically via useDashboardData's key.
+//
+// Unchanged from v2:
+//   - Cache-first hydrate + always-revalidate
+//   - Debounced search (150ms)
+//   - Memoized leaf components
+//   - Skeleton on first load, EmptyState on hard failure,
+//     inline stale chip on refresh failure
+
+import { useCallback, useMemo, useState } from 'react';
+import {
+  View,
+  Text,
+  StyleSheet,
+  ScrollView,
+  RefreshControl,
+  Alert,
+} from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
+import Ionicons from '@react-native-vector-icons/ionicons';
+import { useTheme } from '../../styles/ThemeProvider';
+import { spacing, radius } from '../../styles/spacing';
+import { typography } from '../../styles/typography';
+import { useAuth } from '../../hooks/useAuth';
+import { usePermissions } from '../../hooks/usePermissions';
+import { useOrganizationContext } from '../../context/OrganizationContext';
+
+import { useDashboardData } from './hooks/useDashboardData';
+import { useDashboardSearch } from './hooks/useDashboardSearch';
+import { useDashboardScope } from './hooks/useDashboardScope';
+
+import DashboardHeader from './components/DashboardHeader';
+import SalesHeroCard from './components/SalesHeroCard';
+import PulseRow from './components/PulseRow';
+import Section from './components/Section';
+import AttentionList from './components/AttentionList';
+import QuickActions from './components/QuickActions';
+import BranchPerformance from './components/BranchPerformance';
+import ShiftCard from './components/ShiftCard';
+import PaymentMix from './components/PaymentMix';
+import TopProducts from './components/TopProducts';
+import RecentActivity from './components/RecentActivity';
+import ScopePickerModal from './components/ScopePickerModal';
+import EmptyState from './components/EmptyState';
+import DashboardSkeleton from './components/skeletons/DashboardSkeleton';
+
+const pickAttention = (a) => [a.title, a.body];
+const pickAction = (a) => [a.label];
+const pickBranch = (b) => [b.name];
+const pickProduct = (p) => [p.name];
+const pickRecent = (r) => [r.title, r.sub];
+
+export default function DashboardScreen() {
+  const { theme: c } = useTheme();
+  const styles = useMemo(() => makeStyles(c), [c]);
+  const { user } = useAuth();
+  const { isOwner } = usePermissions();
+  const { activeOrganization } = useOrganizationContext();
+
+  const [scopeModalOpen, setScopeModalOpen] = useState(false);
+
+  // ── Scope FIRST (no data dependency) ─────────────────────────────
+  const {
+    viewBranchId,
+    scopeLabel,
+    scopeOptions,
+    canSeeOrgWide,
+    pickScope,
+  } = useDashboardScope({ isOwner });
+
+  // ── Data SECOND (uses viewBranchId) ──────────────────────────────
+  const { data, loading, refreshing, error, staleError, refresh, reload } =
+    useDashboardData({
+      organizationId: activeOrganization?.id,
+      branchId: viewBranchId,
+    });
+
+  // Search: immediate input + debounced query
+  const {
+    input: query,
+    setInput: setQuery,
+    searching,
+    filter,
+    clear: clearQuery,
+  } = useDashboardSearch();
+
+  // Merge server-granted org-wide scope for non-owners after data lands.
+  const effectiveCanSeeOrgWide =
+    canSeeOrgWide || data?.scope?.isOrgWide === true;
+
+  const firstName =
+    user?.firstName || user?.name?.split?.(' ')?.[0] || 'there';
+  const initial = firstName.trim().charAt(0).toUpperCase() || '?';
+
+  // ── Derived payload slices ──────────────────────────────────────
+  const sales = data?.sales || null;
+  const pulse = data?.pulse || null;
+  const attentionAll = Array.isArray(data?.attention) ? data.attention : [];
+  const branchesAll = Array.isArray(data?.branches) ? data.branches : [];
+  const productsAll = Array.isArray(data?.products) ? data.products : [];
+  const recentAll = Array.isArray(data?.recent) ? data.recent : [];
+  const shortcutsAll = Array.isArray(data?.shortcuts) ? data.shortcuts : [];
+  const shift = data?.shift || null;
+  const payments = data?.payments || null;
+
+  const attention = filter(attentionAll, pickAttention);
+  const actions = filter(shortcutsAll, pickAction);
+  const branches = filter(branchesAll, pickBranch);
+  const products = filter(productsAll, pickProduct);
+  const recent = filter(recentAll, pickRecent);
+
+  const noResults =
+    searching &&
+    !attention.length &&
+    !actions.length &&
+    !branches.length &&
+    !products.length &&
+    !recent.length;
+
+  const currency = sales?.currency || activeOrganization?.currency || 'KES';
+  const gross = Number(sales?.gross || 0);
+  const delta = sales?.deltaPct;
+
+  const showAggregates = !searching && !error;
+  const showStaleChip = !!staleError && !!data;
+
+  // ── Handlers ────────────────────────────────────────────────────
+  const onRefresh = useCallback(() => {
+    refresh();
+  }, [refresh]);
+
+  const onOpenScope = useCallback(() => {
+    if (!effectiveCanSeeOrgWide) return;
+    setScopeModalOpen(true);
+  }, [effectiveCanSeeOrgWide]);
+
+  const onCloseScope = useCallback(() => setScopeModalOpen(false), []);
+
+  const onPickScope = useCallback(
+    (id) => {
+      setScopeModalOpen(false);
+      // pickScope updates viewBranchId → useDashboardData's key changes →
+      // hydrate effect re-runs and refetches. No manual reload needed.
+      pickScope(id);
+    },
+    [pickScope]
+  );
+
+  const onPressBell = useCallback(() => {
+    Alert.alert('Notifications', 'Coming soon.');
+  }, []);
+
+  const onPressAction = useCallback((action) => {
+    Alert.alert(action?.label || 'Action', 'Coming soon.');
+  }, []);
+
+  const onPressSeeAll = useCallback((what) => {
+    Alert.alert(what, 'Coming soon.');
+  }, []);
+
+  // ── Early returns ───────────────────────────────────────────────
+  if (loading && !data && !error) {
+    return <DashboardSkeleton />;
+  }
+
+  if (error && !data) {
+    return (
+      <SafeAreaView style={styles.safe} edges={['top']}>
+        <View style={styles.errorWrap}>
+          <EmptyState
+            icon="cloud-offline-outline"
+            title="Couldn't load dashboard"
+            body={error}
+            actionLabel="Try again"
+            onAction={() => reload()}
+          />
+        </View>
+      </SafeAreaView>
+    );
+  }
+
+  // ── Main render ─────────────────────────────────────────────────
+  return (
+    <SafeAreaView style={styles.safe} edges={['top']}>
+      <ScrollView
+        style={styles.scrollView}
+        contentContainerStyle={styles.scroll}
+        showsVerticalScrollIndicator={false}
+        keyboardShouldPersistTaps="handled"
+        refreshControl={
+          <RefreshControl
+            refreshing={refreshing}
+            onRefresh={onRefresh}
+            tintColor={c.primary}
+          />
+        }
+      >
+        <DashboardHeader
+          firstName={firstName}
+          initial={initial}
+          orgName={activeOrganization?.name}
+          scopeLabel={scopeLabel}
+          canSeeOrgWide={effectiveCanSeeOrgWide}
+          onOpenScope={onOpenScope}
+          query={query}
+          onQueryChange={setQuery}
+          onClearQuery={clearQuery}
+          onPressBell={onPressBell}
+        />
+
+        <View style={styles.body}>
+          {showStaleChip ? (
+            <View style={styles.staleChip}>
+              <Ionicons
+                name="cloud-offline-outline"
+                size={14}
+                color={c.warning || c.textSecondary}
+              />
+              <Text style={styles.staleText} numberOfLines={2}>
+                Showing last saved data · {staleError}
+              </Text>
+            </View>
+          ) : null}
+
+          {showAggregates && sales ? (
+            <SalesHeroCard
+              currency={currency}
+              gross={gross}
+              delta={delta}
+            />
+          ) : null}
+
+          {showAggregates && pulse ? <PulseRow pulse={pulse} /> : null}
+
+          {attention.length > 0 ? (
+            <Section
+              title="Needs attention"
+              badge={String(attention.length)}
+              action={searching ? null : 'See all'}
+              onAction={
+                searching ? null : () => onPressSeeAll('Needs attention')
+              }
+            >
+              <AttentionList items={attention} />
+            </Section>
+          ) : null}
+
+          {actions.length > 0 ? (
+            <Section title="Quick actions">
+              <QuickActions items={actions} onPress={onPressAction} />
+            </Section>
+          ) : null}
+
+          {branches.length > 0 ? (
+            <Section
+              title="Branch performance"
+              action={searching ? null : 'Compare'}
+              onAction={
+                searching ? null : () => onPressSeeAll('Branch performance')
+              }
+            >
+              <BranchPerformance currency={currency} branches={branches} />
+            </Section>
+          ) : null}
+
+          {shift ? (
+            <Section title="Your shift">
+              <ShiftCard currency={currency} shift={shift} />
+            </Section>
+          ) : null}
+
+          {showAggregates && payments?.methods?.length ? (
+            <Section title="Payment mix">
+              <PaymentMix methods={payments.methods} />
+            </Section>
+          ) : null}
+
+          {products.length > 0 ? (
+            <Section
+              title="Top products"
+              action={searching ? null : 'View all'}
+              onAction={
+                searching ? null : () => onPressSeeAll('Top products')
+              }
+            >
+              <TopProducts currency={currency} products={products} />
+            </Section>
+          ) : null}
+
+          {recent.length > 0 ? (
+            <Section title="Recent activity">
+              <RecentActivity currency={currency} items={recent} />
+            </Section>
+          ) : null}
+
+          {noResults ? (
+            <EmptyState
+              icon="search-outline"
+              title={`No matches for "${query.trim()}"`}
+              body="Try a different product, branch or person."
+            />
+          ) : null}
+        </View>
+      </ScrollView>
+
+      <ScopePickerModal
+        visible={scopeModalOpen}
+        options={scopeOptions}
+        value={viewBranchId}
+        onPick={onPickScope}
+        onClose={onCloseScope}
+      />
+    </SafeAreaView>
+  );
+}
+
+const makeStyles = (c) =>
+  StyleSheet.create({
+    safe: { flex: 1, backgroundColor: c.hero },
+    scrollView: { flex: 1, backgroundColor: c.background },
+    scroll: { paddingBottom: spacing.xxxl },
+    body: { paddingHorizontal: spacing.xl },
+    errorWrap: { flex: 1, justifyContent: 'center' },
+    staleChip: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: spacing.sm,
+      backgroundColor: c.surfaceElevated,
+      borderRadius: radius.md,
+      paddingVertical: spacing.sm,
+      paddingHorizontal: spacing.md,
+      marginTop: spacing.md,
+    },
+    staleText: {
+      ...typography.caption,
+      color: c.textSecondary,
+      flex: 1,
+      fontWeight: '600',
+    },
+  });
