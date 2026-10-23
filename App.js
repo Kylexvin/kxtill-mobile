@@ -5,6 +5,7 @@ import { ThemeProvider, ThemeRoot } from './src/styles/ThemeProvider';
 import { OnboardingProvider } from './src/context/OnboardingContext';
 import { AuthProvider } from './src/context/AuthContext';
 import { OrganizationProvider } from './src/context/OrganizationContext';
+import { SettingsProvider } from './src/context/SettingsContext';
 import { PermissionsProvider } from './src/context/PermissionsContext';
 import RootNavigator from './src/navigation/RootNavigator';
 
@@ -16,9 +17,11 @@ export default function App() {
           <OnboardingProvider>
             <AuthProvider>
               <OrganizationProvider>
-                <PermissionsProvider>
-                  <RootNavigator />
-                </PermissionsProvider>
+                <SettingsProvider>
+                  <PermissionsProvider>
+                    <RootNavigator />
+                  </PermissionsProvider>
+                </SettingsProvider>
               </OrganizationProvider>
             </AuthProvider>
           </OnboardingProvider>

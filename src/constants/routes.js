@@ -6,41 +6,30 @@ export const ROUTES = {
   // Main
   MAIN_TABS: 'MainTabs',
   TAB_HOME: 'HomeTab',
-  TAB_BRANCHES: 'BranchesTab',
-  TAB_REPORTS: 'ReportsTab',
+  TAB_BUSINESS: 'BusinessTab',
+  TAB_ACTIONS: 'ActionsTab',
   TAB_NOTIFICATIONS: 'NotificationsTab',
   TAB_ACCOUNT: 'AccountTab',
 
-  // Other screens referenced elsewhere
-  DASHBOARD: 'Dashboard',
-  BRANCHES: 'Branches',
-  BRANCH_DETAILS: 'BranchDetails',
-  REPORTS: 'Reports',
-  REPORT_DETAILS: 'ReportDetails',
-  STOCK_OVERVIEW: 'StockOverview',
-  PRODUCT_DETAILS: 'ProductDetails',
-  SHIFTS: 'Shifts',
-  SHIFT_DETAILS: 'ShiftDetails',
-  NOTIFICATIONS: 'Notifications',
-  NOTIFICATION_DETAILS: 'NotificationDetails',
-  TRANSFERS: 'Transfers',
-  RECONCILIATION: 'Reconciliation',
-  TEAM: 'Team',
-  SETTINGS: 'Settings',
-  DEVICES: 'Devices',
-  ACCOUNT: 'Account',
+  // Branch stack (Business tab)
+  BRANCHES_LIST: 'BranchesList',
+  BRANCH_HOME: 'BranchHome',
+  BRANCH_SALES: 'BranchSales',
+  BRANCH_STOCK: 'BranchStock',
+  BRANCH_SHIFTS: 'BranchShifts',
+  BRANCH_TRANSFERS: 'BranchTransfers',
+  BRANCH_TEAM: 'BranchTeam',
+  BRANCH_SETTINGS: 'BranchSettings',
+  BRANCH_DEVICES: 'BranchDevices',
+  BRANCH_ACTIVITY: 'BranchActivity',
+
+  // Account stack
   KXTILL_SETTINGS: 'KxtillSettings',
 
-BRANCHES_LIST: 'BranchesList',
-BRANCH_HOME: 'BranchHome',
-BRANCH_SALES: 'BranchSales',
-BRANCH_STOCK: 'BranchStock',
-BRANCH_SHIFTS: 'BranchShifts',
-BRANCH_TRANSFERS: 'BranchTransfers',
-BRANCH_TEAM: 'BranchTeam',
-BRANCH_SETTINGS: 'BranchSettings',
-BRANCH_DEVICES: 'BranchDevices',
-BRANCH_ACTIVITY: 'BranchActivity',
-
-
-}; 
+  // Reserved — referenced in code comments, not currently mounted
+  // DASHBOARD / BRANCHES / BRANCH_DETAILS / REPORTS / REPORT_DETAILS /
+  // STOCK_OVERVIEW / PRODUCT_DETAILS / SHIFTS / SHIFT_DETAILS /
+  // NOTIFICATIONS / NOTIFICATION_DETAILS / TRANSFERS / RECONCILIATION /
+  // TEAM / SETTINGS / DEVICES / ACCOUNT
+  // — add these back only when their corresponding screen exists.
+};

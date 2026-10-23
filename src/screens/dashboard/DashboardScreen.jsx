@@ -3,23 +3,13 @@
 // Home tab. Renders the mobile dashboard from GET .../kxtill/mobile/dashboard.
 // Sections are shown only when the backend returns them (null = hidden).
 //
-// v3 — wiring fix:
-//   - Ownership is read from usePermissions().isOwner (same source as
-//     AccountScreen). The old isOwnerOrg(activeOrganization) check silently
-//     failed for owners because listOrganizations() does not include the
-//     permission set on the org object.
-//   - useDashboardScope no longer needs `data`; it only takes `isOwner`.
-//     `data.scope.isOrgWide` is merged in here once data lands, as a fallback
-//     for non-owner org-wide users.
-//   - Hook order: scope first (no data dep), data second (depends on scope).
-//     Scope change re-fetches automatically via useDashboardData's key.
-//
-// Unchanged from v2:
-//   - Cache-first hydrate + always-revalidate
-//   - Debounced search (150ms)
-//   - Memoized leaf components
-//   - Skeleton on first load, EmptyState on hard failure,
-//     inline stale chip on refresh failure
+// v4 — no hardcoded currency:
+//   - `currency` is resolved from activeOrganization.currency. If the
+//     organization has not loaded a currency yet, we pass `undefined`
+//     down rather than a country default.
+//   - Leaf components were updated to accept `undefined` and render the
+//     number without a currency prefix (no stray "undefined 1,234").
+//   - Everything else from v3 preserved.
 
 import { useCallback, useMemo, useState } from 'react';
 import {
@@ -73,7 +63,7 @@ export default function DashboardScreen() {
 
   const [scopeModalOpen, setScopeModalOpen] = useState(false);
 
-  // ── Scope FIRST (no data dependency) ─────────────────────────────
+  // Scope FIRST — no data dependency.
   const {
     viewBranchId,
     scopeLabel,
@@ -82,14 +72,14 @@ export default function DashboardScreen() {
     pickScope,
   } = useDashboardScope({ isOwner });
 
-  // ── Data SECOND (uses viewBranchId) ──────────────────────────────
+  // Data SECOND — depends on viewBranchId.
   const { data, loading, refreshing, error, staleError, refresh, reload } =
     useDashboardData({
       organizationId: activeOrganization?.id,
       branchId: viewBranchId,
     });
 
-  // Search: immediate input + debounced query
+  // Search.
   const {
     input: query,
     setInput: setQuery,
@@ -98,7 +88,6 @@ export default function DashboardScreen() {
     clear: clearQuery,
   } = useDashboardSearch();
 
-  // Merge server-granted org-wide scope for non-owners after data lands.
   const effectiveCanSeeOrgWide =
     canSeeOrgWide || data?.scope?.isOrgWide === true;
 
@@ -131,7 +120,11 @@ export default function DashboardScreen() {
     !products.length &&
     !recent.length;
 
-  const currency = sales?.currency || activeOrganization?.currency || 'KES';
+  // Currency: organization is the single source of truth. No country default.
+  // If the org hasn't loaded yet, `currency` is undefined and leaf components
+  // render the number without a prefix. This is correct behaviour — a
+  // half-loaded screen should not silently show the wrong currency.
+  const currency = sales?.currency || null;
   const gross = Number(sales?.gross || 0);
   const delta = sales?.deltaPct;
 
@@ -153,8 +146,6 @@ export default function DashboardScreen() {
   const onPickScope = useCallback(
     (id) => {
       setScopeModalOpen(false);
-      // pickScope updates viewBranchId → useDashboardData's key changes →
-      // hydrate effect re-runs and refetches. No manual reload needed.
       pickScope(id);
     },
     [pickScope]

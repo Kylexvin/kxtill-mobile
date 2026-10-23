@@ -1,15 +1,19 @@
 // src/screens/dashboard/components/SalesHeroCard.jsx
 //
-// Hero stats card. Drops into your existing layout: it still overlaps the
-// header band (default 68px, pass `overlap={0}` to turn that off).
+// Hero stats card. Overlaps the header band (default 68px, pass
+// `overlap={0}` to disable).
 //
-// Props (existing): currency, gross, delta
-// Props (new, all optional):
-//   series   number[]                 sales per hour/day → trend bars
-//   stats    [{ label, value }]       up to 3, shown as a strip under the
-//                                     total, e.g. Orders / Avg sale / Profit.
-//                                     Numbers are formatted with fmt().
-//   overlap  number                   default 68
+// Currency:
+//   - The `currency` prop is authoritative. It comes from the backend's
+//     `sales.currency` field (which itself resolves from the org's
+//     settings row). If it's null or undefined, no prefix is rendered —
+//     the number shows bare. No country fallback.
+//
+// Props:
+//   currency, gross, delta
+//   series   number[]
+//   stats    [{ label, value, isCurrency? }]
+//   overlap  number
 
 import { memo, useEffect, useMemo, useRef } from 'react';
 import {
@@ -47,9 +51,17 @@ function LiveDot({ color }) {
           dot.ring,
           {
             backgroundColor: color,
-            opacity: pulse.interpolate({ inputRange: [0, 1], outputRange: [0.5, 0] }),
+            opacity: pulse.interpolate({
+              inputRange: [0, 1],
+              outputRange: [0.5, 0],
+            }),
             transform: [
-              { scale: pulse.interpolate({ inputRange: [0, 1], outputRange: [0.4, 1.7] }) },
+              {
+                scale: pulse.interpolate({
+                  inputRange: [0, 1],
+                  outputRange: [0.4, 1.7],
+                }),
+              },
             ],
           },
         ]}
@@ -59,12 +71,24 @@ function LiveDot({ color }) {
   );
 }
 const dot = StyleSheet.create({
-  box: { width: 14, height: 14, alignItems: 'center', justifyContent: 'center' },
+  box: {
+    width: 14,
+    height: 14,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
   ring: { position: 'absolute', width: 14, height: 14, borderRadius: 7 },
   core: { width: 6, height: 6, borderRadius: 3 },
 });
 
-function SalesHeroCardBase({ currency, gross, delta, series, stats, overlap = 68 }) {
+function SalesHeroCardBase({
+  currency,
+  gross,
+  delta,
+  series,
+  stats,
+  overlap = 68,
+}) {
   const { theme: c } = useTheme();
   const { width } = useWindowDimensions();
   const valueSize = clamp(Math.round(width * 0.1), 34, 46);
@@ -72,6 +96,11 @@ function SalesHeroCardBase({ currency, gross, delta, series, stats, overlap = 68
     () => makeStyles(c, valueSize, overlap),
     [c, valueSize, overlap]
   );
+
+  // Resolve currency: pass-through only. No org fallback here — the
+  // backend already resolved it from settings. Trim to catch `''` from
+  // accidental upstream defaults; treat empty as "no prefix".
+  const prefix = typeof currency === 'string' ? currency.trim() : '';
 
   const hasDelta = delta != null && Number.isFinite(Number(delta));
   const up = hasDelta && Number(delta) >= 0;
@@ -113,7 +142,7 @@ function SalesHeroCardBase({ currency, gross, delta, series, stats, overlap = 68
 
       {/* Total */}
       <View style={styles.valueRow}>
-        <Text style={styles.currency}>{currency}</Text>
+        {prefix ? <Text style={styles.currency}>{prefix}</Text> : null}
         <Text style={styles.value} numberOfLines={1} adjustsFontSizeToFit>
           {fmt(gross)}
         </Text>
@@ -122,8 +151,8 @@ function SalesHeroCardBase({ currency, gross, delta, series, stats, overlap = 68
         {hasDelta
           ? 'vs usual pace for this time'
           : Number(gross) === 0
-          ? 'No sales yet today'
-          : 'Not enough history yet'}
+            ? 'No sales yet today'
+            : 'Not enough history yet'}
       </Text>
 
       {/* Trend */}
@@ -142,22 +171,33 @@ function SalesHeroCardBase({ currency, gross, delta, series, stats, overlap = 68
         </View>
       ) : null}
 
-      {/* Stat strip */}
+      {/* Stat strip — money stats prefix with currency; counts stay bare */}
       {strip.length > 0 ? (
         <View style={styles.strip}>
-          {strip.map((s, i) => (
-            <View
-              key={s.label}
-              style={[styles.stat, i > 0 && styles.statDivider]}
-            >
-              <Text style={styles.statValue} numberOfLines={1} adjustsFontSizeToFit>
-                {typeof s.value === 'number' ? fmt(s.value) : s.value}
-              </Text>
-              <Text style={styles.statLabel} numberOfLines={1}>
-                {s.label}
-              </Text>
-            </View>
-          ))}
+          {strip.map((s, i) => {
+            const isMoney = s?.isCurrency === true;
+            const displayValue =
+              typeof s.value === 'number' ? fmt(s.value) : s.value ?? '';
+            return (
+              <View
+                key={s.label}
+                style={[styles.stat, i > 0 && styles.statDivider]}
+              >
+                <Text
+                  style={styles.statValue}
+                  numberOfLines={1}
+                  adjustsFontSizeToFit
+                >
+                  {isMoney && prefix
+                    ? `${prefix} ${displayValue}`
+                    : displayValue}
+                </Text>
+                <Text style={styles.statLabel} numberOfLines={1}>
+                  {s.label}
+                </Text>
+              </View>
+            );
+          })}
         </View>
       ) : null}
     </View>
@@ -180,7 +220,6 @@ const makeStyles = (c, valueSize, overlap) =>
       shadowOffset: { width: 0, height: 6 },
       elevation: 5,
     },
-    // soft accent bloom, top-right
     glow: {
       position: 'absolute',
       top: -90,
