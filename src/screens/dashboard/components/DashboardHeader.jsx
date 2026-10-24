@@ -152,9 +152,9 @@ function DashboardHeaderBase({
           accessibilityRole="button"
           accessibilityLabel={`Viewing ${scopeLabel}. Switch scope`}
         >
-          <View style={styles.switchIcon}>
+          {/* <View style={styles.switchIcon}>
             <Ionicons name="storefront" size={15} color={c.hero} />
-          </View>
+          </View> */}
           <View style={styles.flex}>
             <Text style={styles.switchKicker}>VIEWING</Text>
             <Text style={styles.switchValue} numberOfLines={1}>

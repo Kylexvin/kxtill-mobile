@@ -1,15 +1,4 @@
 // src/screens/dashboard/DashboardScreen.jsx
-//
-// Home tab. Renders the mobile dashboard from GET .../kxtill/mobile/dashboard.
-// Sections are shown only when the backend returns them (null = hidden).
-//
-// v4 — no hardcoded currency:
-//   - `currency` is resolved from activeOrganization.currency. If the
-//     organization has not loaded a currency yet, we pass `undefined`
-//     down rather than a country default.
-//   - Leaf components were updated to accept `undefined` and render the
-//     number without a currency prefix (no stray "undefined 1,234").
-//   - Everything else from v3 preserved.
 
 import { useCallback, useMemo, useState } from 'react';
 import {
@@ -21,13 +10,16 @@ import {
   Alert,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { useNavigation } from '@react-navigation/native';
 import Ionicons from '@react-native-vector-icons/ionicons';
 import { useTheme } from '../../styles/ThemeProvider';
 import { spacing, radius } from '../../styles/spacing';
 import { typography } from '../../styles/typography';
 import { useAuth } from '../../hooks/useAuth';
 import { usePermissions } from '../../hooks/usePermissions';
+import { useNotificationsUnread } from '../../hooks/useNotificationsUnread';
 import { useOrganizationContext } from '../../context/OrganizationContext';
+import { ROUTES } from '../../constants/routes';
 
 import { useDashboardData } from './hooks/useDashboardData';
 import { useDashboardSearch } from './hooks/useDashboardSearch';
@@ -57,9 +49,11 @@ const pickRecent = (r) => [r.title, r.sub];
 export default function DashboardScreen() {
   const { theme: c } = useTheme();
   const styles = useMemo(() => makeStyles(c), [c]);
+  const navigation = useNavigation();
   const { user } = useAuth();
   const { isOwner } = usePermissions();
   const { activeOrganization } = useOrganizationContext();
+  const unreadCount = useNotificationsUnread();
 
   const [scopeModalOpen, setScopeModalOpen] = useState(false);
 
@@ -120,10 +114,6 @@ export default function DashboardScreen() {
     !products.length &&
     !recent.length;
 
-  // Currency: organization is the single source of truth. No country default.
-  // If the org hasn't loaded yet, `currency` is undefined and leaf components
-  // render the number without a prefix. This is correct behaviour — a
-  // half-loaded screen should not silently show the wrong currency.
   const currency = sales?.currency || null;
   const gross = Number(sales?.gross || 0);
   const delta = sales?.deltaPct;
@@ -152,8 +142,8 @@ export default function DashboardScreen() {
   );
 
   const onPressBell = useCallback(() => {
-    Alert.alert('Notifications', 'Coming soon.');
-  }, []);
+    navigation.navigate(ROUTES.TAB_NOTIFICATIONS);
+  }, [navigation]);
 
   const onPressAction = useCallback((action) => {
     Alert.alert(action?.label || 'Action', 'Coming soon.');
@@ -211,6 +201,7 @@ export default function DashboardScreen() {
           onQueryChange={setQuery}
           onClearQuery={clearQuery}
           onPressBell={onPressBell}
+          unreadCount={unreadCount}
         />
 
         <View style={styles.body}>
