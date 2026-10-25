@@ -8,3 +8,7 @@ The "Live Audit Trail" Feed: Small business owners in Kenya and Tanzania constan
 • Pharmacy/Batch Expiry Countdown (KxTill Specialty): Leverage KxTill's core strength. Give the admin a visual dashboard counting down batches approaching their FEFO (First Expired, First Out) threshold, allowing them to mark items for clearance directly from their phone.
 Report tab to pop up more tabs
 refresh org at org screen
+Cache refresh in the background, update asap
+alert screen to be navigatable to specific screens
+receipts and shares
+print barcodes in bulk

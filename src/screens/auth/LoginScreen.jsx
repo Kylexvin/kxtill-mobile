@@ -1,8 +1,15 @@
 // src/screens/auth/LoginScreen.jsx
 //
-// Concept: the screen "prints" a till receipt. An accent-coloured hero sits above a
-// themed sheet with a torn top edge; the sheet slides up once on load
-// like a receipt coming out of the printer. Everything else stays quiet.
+// Password sign-in only. The "Scan to connect" chip at the top of the
+// hero is still the primary way in for cashiers on a POS — password is
+// the fallback for owners/admins.
+//
+// v3 — password-only login:
+//   - Removed KXBYTE and Google OAuth blocks.
+//   - Removed the "or" separator.
+//   - Removed beginOAuth usage. WebBrowser is still imported for
+//     forgot-password and legal links.
+//   - Layout tightens: Sign in → dashed rule → legal footer.
 
 import { useEffect, useRef, useState } from 'react';
 import {
@@ -93,7 +100,7 @@ export default function LoginScreen() {
   const styles = useThemedStyles(makeStyles);
   const navigation = useNavigation();
   const insets = useSafeAreaInsets();
-  const { signIn, beginOAuth, isSubmitting, error } = useAuth();
+  const { signIn, isSubmitting, error } = useAuth();
 
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -132,19 +139,10 @@ export default function LoginScreen() {
     }
   };
 
-  const handleOAuth = async (provider) => {
-    try {
-      await beginOAuth(provider);
-    } catch {
-      // error surfaced by auth context
-    }
-  };
-
   const goPair = () => navigation.navigate(ROUTES.PAIR_DEVICE);
 
   return (
     <SafeAreaView style={styles.safe} edges={['top']}>
-      {/* Depth: two soft discs behind the hero */}
       <View pointerEvents="none" style={styles.orbA} />
       <View pointerEvents="none" style={styles.orbB} />
 
@@ -302,46 +300,6 @@ export default function LoginScreen() {
                 )}
               </TouchableOpacity>
 
-              {config.oauthEnabled ? (
-                <>
-                  <View style={styles.orRow}>
-                    <DashedRule style={styles.orRule} />
-                    <Text style={styles.orText}>or</Text>
-                    <DashedRule style={styles.orRule} />
-                  </View>
-
-                  <View style={styles.oauthRow}>
-                    <TouchableOpacity
-                      style={[styles.oauthBtn, busy && styles.disabled]}
-                      onPress={() => handleOAuth('oauth')}
-                      disabled={busy}
-                      activeOpacity={0.85}
-                    >
-                      <Image
-                        source={BRAND_ICONS.kxbyte}
-                        style={styles.kxbyteLogo}
-                        resizeMode="contain"
-                      />
-                      <Text style={styles.oauthText}>KXBYTE</Text>
-                    </TouchableOpacity>
-
-                    <TouchableOpacity
-                      style={[styles.oauthBtn, busy && styles.disabled]}
-                      onPress={() => handleOAuth('google')}
-                      disabled={busy}
-                      activeOpacity={0.85}
-                    >
-                      <Ionicons
-                        name="logo-google"
-                        size={18}
-                        color={c.textPrimary}
-                      />
-                      <Text style={styles.oauthText}>Google</Text>
-                    </TouchableOpacity>
-                  </View>
-                </>
-              ) : null}
-
               <DashedRule style={{ marginTop: 22, marginBottom: 14 }} />
               <Text style={styles.footer}>
                 By signing in you agree to KxTill&apos;s{' '}
@@ -376,200 +334,176 @@ export default function LoginScreen() {
   );
 }
 
-const makeStyles = (c) => StyleSheet.create({
-  safe: { flex: 1, backgroundColor: c.hero },
-  flex: { flex: 1 },
-  scroll: { flexGrow: 1, justifyContent: 'space-between' },
-  disabled: { opacity: 0.6 },
+const makeStyles = (c) =>
+  StyleSheet.create({
+    safe: { flex: 1, backgroundColor: c.hero },
+    flex: { flex: 1 },
+    scroll: { flexGrow: 1, justifyContent: 'space-between' },
+    disabled: { opacity: 0.6 },
 
-  // Background discs
-  orbA: {
-    position: 'absolute',
-    top: -140,
-    right: -110,
-    width: 340,
-    height: 340,
-    borderRadius: 170,
-    backgroundColor: c.heroOrbA,
-    opacity: 0.55,
-  },
-  orbB: {
-    position: 'absolute',
-    top: 120,
-    left: -150,
-    width: 280,
-    height: 280,
-    borderRadius: 140,
-    backgroundColor: c.heroOrbB,
-    opacity: 0.6,
-  },
+    orbA: {
+      position: 'absolute',
+      top: -140,
+      right: -110,
+      width: 340,
+      height: 340,
+      borderRadius: 170,
+      backgroundColor: c.heroOrbA,
+      opacity: 0.55,
+    },
+    orbB: {
+      position: 'absolute',
+      top: 120,
+      left: -150,
+      width: 280,
+      height: 280,
+      borderRadius: 140,
+      backgroundColor: c.heroOrbB,
+      opacity: 0.6,
+    },
 
-  // Hero
-  hero: { paddingHorizontal: 24, paddingTop: 12, paddingBottom: 40 },
-  topRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    marginBottom: 44,
-  },
-  brandRow: { flexDirection: 'row', alignItems: 'center' },
-  logoChip: {
-    width: 44,
-    height: 44,
-    borderRadius: 14,
-    backgroundColor: c.background,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginRight: 12,
-  },
-  brandLogo: { width: 28, height: 28 },
-  brandName: {
-    color: c.textOnPrimary,
-    fontSize: 20,
-    fontWeight: '800',
-    letterSpacing: -0.3,
-  },
-  brandBy: { color: c.onPrimaryMuted, fontSize: 12, marginTop: 1 },
+    hero: { paddingHorizontal: 24, paddingTop: 12, paddingBottom: 40 },
+    topRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      marginBottom: 44,
+    },
+    brandRow: { flexDirection: 'row', alignItems: 'center' },
+    logoChip: {
+      width: 44,
+      height: 44,
+      borderRadius: 14,
+      backgroundColor: c.background,
+      alignItems: 'center',
+      justifyContent: 'center',
+      marginRight: 12,
+    },
+    brandLogo: { width: 28, height: 28 },
+    brandName: {
+      color: c.textOnPrimary,
+      fontSize: 20,
+      fontWeight: '800',
+      letterSpacing: -0.3,
+    },
+    brandBy: { color: c.onPrimaryMuted, fontSize: 12, marginTop: 1 },
 
-  scanChip: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    paddingVertical: 8,
-    paddingHorizontal: 12,
-    borderRadius: 999,
-    borderWidth: 1,
-    borderColor: c.onPrimaryBorder,
-  },
-  scanChipText: { color: c.textOnPrimary, fontSize: 13, fontWeight: '600' },
+    scanChip: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 6,
+      paddingVertical: 8,
+      paddingHorizontal: 12,
+      borderRadius: 999,
+      borderWidth: 1,
+      borderColor: c.onPrimaryBorder,
+    },
+    scanChipText: { color: c.textOnPrimary, fontSize: 13, fontWeight: '600' },
 
-  headline: {
-    color: c.textOnPrimary,
-    fontSize: 40,
-    lineHeight: 42,
-    fontWeight: '900',
-    letterSpacing: -1.4,
-    maxWidth: 300,
-  },
-  subhead: {
-    color: c.onPrimaryMuted,
-    fontSize: 16,
-    lineHeight: 22,
-    marginTop: 12,
-    maxWidth: 300,
-  },
+    headline: {
+      color: c.textOnPrimary,
+      fontSize: 40,
+      lineHeight: 42,
+      fontWeight: '900',
+      letterSpacing: -1.4,
+      maxWidth: 300,
+    },
+    subhead: {
+      color: c.onPrimaryMuted,
+      fontSize: 16,
+      lineHeight: 22,
+      marginTop: 12,
+      maxWidth: 300,
+    },
 
-  // Receipt
-  receiptWrap: { width: '100%' },
-  edgeRow: {
-    flexDirection: 'row',
-    height: 10,
-    overflow: 'hidden',
-    justifyContent: 'center',
-  },
-  tooth: {
-    width: 0,
-    height: 0,
-    borderLeftWidth: TOOTH / 2,
-    borderRightWidth: TOOTH / 2,
-    borderBottomWidth: 10,
-    borderLeftColor: 'transparent',
-    borderRightColor: 'transparent',
-    borderBottomColor: c.sheet,
-  },
-  paper: {
-    backgroundColor: c.sheet,
-    paddingHorizontal: 24,
-    paddingTop: 18,
-  },
-  paperTitle: {
-    color: c.textPrimary,
-    fontSize: 22,
-    fontWeight: '800',
-    letterSpacing: -0.4,
-    marginBottom: 12,
-  },
-  rule: {
-    height: 1,
-    borderWidth: 1,
-    borderStyle: 'dashed',
-    borderColor: c.borderStrong,
-    borderRadius: 1,
-  },
+    receiptWrap: { width: '100%' },
+    edgeRow: {
+      flexDirection: 'row',
+      height: 10,
+      overflow: 'hidden',
+      justifyContent: 'center',
+    },
+    tooth: {
+      width: 0,
+      height: 0,
+      borderLeftWidth: TOOTH / 2,
+      borderRightWidth: TOOTH / 2,
+      borderBottomWidth: 10,
+      borderLeftColor: 'transparent',
+      borderRightColor: 'transparent',
+      borderBottomColor: c.sheet,
+    },
+    paper: {
+      backgroundColor: c.sheet,
+      paddingHorizontal: 24,
+      paddingTop: 18,
+    },
+    paperTitle: {
+      color: c.textPrimary,
+      fontSize: 22,
+      fontWeight: '800',
+      letterSpacing: -0.4,
+      marginBottom: 12,
+    },
+    rule: {
+      height: 1,
+      borderWidth: 1,
+      borderStyle: 'dashed',
+      borderColor: c.borderStrong,
+      borderRadius: 1,
+    },
 
-  // Fields
-  fieldWrap: { marginBottom: 18 },
-  labelRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 2,
-  },
-  label: { color: c.textSecondary, fontSize: 13, fontWeight: '600' },
-  rightActions: { flexDirection: 'row', gap: 14 },
-  linkText: { color: c.link, fontSize: 13, fontWeight: '700' },
-  input: {
-    color: c.textPrimary,
-    fontSize: 17,
-    paddingVertical: 12,
-    paddingHorizontal: 0,
-    borderBottomWidth: 2,
-    borderBottomColor: c.borderStrong,
-  },
-  inputFocused: { borderBottomColor: c.primary },
+    fieldWrap: { marginBottom: 18 },
+    labelRow: {
+      flexDirection: 'row',
+      justifyContent: 'space-between',
+      alignItems: 'center',
+      marginBottom: 2,
+    },
+    label: { color: c.textSecondary, fontSize: 13, fontWeight: '600' },
+    rightActions: { flexDirection: 'row', gap: 14 },
+    linkText: { color: c.link, fontSize: 13, fontWeight: '700' },
+    input: {
+      color: c.textPrimary,
+      fontSize: 17,
+      paddingVertical: 12,
+      paddingHorizontal: 0,
+      borderBottomWidth: 2,
+      borderBottomColor: c.borderStrong,
+    },
+    inputFocused: { borderBottomColor: c.primary },
 
-  errorBox: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    backgroundColor: c.dangerSoft,
-    borderRadius: 10,
-    padding: 12,
-    marginBottom: 18,
-  },
-  errorText: { flex: 1, color: c.danger, fontSize: 13, fontWeight: '600' },
+    errorBox: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 8,
+      backgroundColor: c.dangerSoft,
+      borderRadius: 10,
+      padding: 12,
+      marginBottom: 18,
+    },
+    errorText: { flex: 1, color: c.danger, fontSize: 13, fontWeight: '600' },
 
-  // Actions
-  primaryBtn: {
-    backgroundColor: c.primary,
-    borderRadius: 14,
-    minHeight: 54,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginTop: 4,
-  },
-  primaryBtnText: {
-    color: c.textOnPrimary,
-    fontSize: 17,
-    fontWeight: '800',
-    letterSpacing: -0.2,
-  },
+    primaryBtn: {
+      backgroundColor: c.primary,
+      borderRadius: 14,
+      minHeight: 54,
+      alignItems: 'center',
+      justifyContent: 'center',
+      marginTop: 4,
+    },
+    primaryBtnText: {
+      color: c.textOnPrimary,
+      fontSize: 17,
+      fontWeight: '800',
+      letterSpacing: -0.2,
+    },
 
-  orRow: { flexDirection: 'row', alignItems: 'center', marginVertical: 18 },
-  orRule: { flex: 1 },
-  orText: { color: c.textSecondary, fontSize: 13, marginHorizontal: 12 },
-
-  oauthRow: { flexDirection: 'row', gap: 12 },
-  oauthBtn: {
-    flex: 1,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 8,
-    minHeight: 50,
-    borderRadius: 14,
-    borderWidth: 1,
-    borderColor: c.borderStrong,
-    backgroundColor: c.surfaceElevated,
-  },
-  oauthText: { color: c.textPrimary, fontSize: 15, fontWeight: '700' },
-  kxbyteLogo: { width: 20, height: 20 },
-
-  footer: {
-    color: c.textSecondary,
-    fontSize: 12,
-    lineHeight: 18,
-    textAlign: 'center',
-  },
-  footerLink: { color: c.link, fontWeight: '700' },
-});
+    footer: {
+      color: c.textSecondary,
+      fontSize: 12,
+      lineHeight: 18,
+      textAlign: 'center',
+    },
+    footerLink: { color: c.link, fontWeight: '700' },
+  });

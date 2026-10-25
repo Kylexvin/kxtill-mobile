@@ -4,13 +4,17 @@
 // and viewBranchId (the display scope used by dashboard + branches tabs).
 //
 // Auto-select rules:
-//   - Org auto-select runs once per sign-in session, on hydrate, and only
-//     when the user has exactly one org (or the persisted one is missing).
+//   - Pairing hint (from POS) takes priority on first hydrate after pairing.
+//   - Persisted org from SecureStore is next.
+//   - Single-org fallback last.
 //   - Explicit clear (setActiveOrganization(null)) disables re-fire.
 //   - Branch auto-select runs once per org hydrate.
-//   - Org identity comparisons use .id, never object reference.
 //
 // Persistence: { organizationId, branchId, viewBranchId } as one blob.
+//
+// Hydration gate:
+//   - `ready` stays false until the org list has been fetched at least once
+//     AND any pending auto-selects have completed.
 
 import {
   createContext,
@@ -46,7 +50,11 @@ async function writeStored(patch) {
 }
 
 export function OrganizationProvider({ children }) {
-  const { status, organizations: loginOrgs } = useAuthContext();
+  const {
+    status,
+    organizations: loginOrgs,
+    consumePairingContext,
+  } = useAuthContext();
 
   const [organizations, setOrganizations] = useState([]);
   const [activeOrganization, setActiveOrganizationState] = useState(null);
@@ -60,6 +68,9 @@ export function OrganizationProvider({ children }) {
 
   const orgAutoSelectDone = useRef(false);
   const branchAutoSelectDone = useRef(false);
+  const loadedOrgsOnce = useRef(false);
+  // One-shot branch hint from the POS pairing flow.
+  const pendingBranchIdRef = useRef(null);
 
   // ── Load organizations ─────────────────────────────────────
   useEffect(() => {
@@ -74,6 +85,8 @@ export function OrganizationProvider({ children }) {
       setLoadingBranches(false);
       orgAutoSelectDone.current = false;
       branchAutoSelectDone.current = false;
+      loadedOrgsOnce.current = false;
+      pendingBranchIdRef.current = null;
       SecureStore.deleteItemAsync(STORAGE_KEY).catch(() => {});
       return;
     }
@@ -95,7 +108,10 @@ export function OrganizationProvider({ children }) {
             'Failed to load organizations'
         );
       } finally {
-        if (!cancelled) setLoadingOrgs(false);
+        if (!cancelled) {
+          loadedOrgsOnce.current = true;
+          setLoadingOrgs(false);
+        }
       }
     })();
     return () => {
@@ -114,6 +130,25 @@ export function OrganizationProvider({ children }) {
     orgAutoSelectDone.current = true;
 
     (async () => {
+      // 1) POS pairing hint — highest priority on first hydrate after pairing.
+      const pairingCtx = consumePairingContext?.();
+      if (pairingCtx?.organizationId) {
+        const found = organizations.find(
+          (o) => o.id === pairingCtx.organizationId
+        );
+        if (found) {
+          setActiveOrganizationState(found);
+          pendingBranchIdRef.current = pairingCtx.branchId || null;
+          // Persist so the next cold start does not need the hint again.
+          await writeStored({
+            organizationId: found.id,
+            branchId: pairingCtx.branchId || undefined,
+          });
+          return;
+        }
+      }
+
+      // 2) Persisted org from a prior session
       const stored = await readStored();
       if (stored?.organizationId) {
         const found = organizations.find((o) => o.id === stored.organizationId);
@@ -122,11 +157,19 @@ export function OrganizationProvider({ children }) {
           return;
         }
       }
+
+      // 3) Single-org fallback
       if (organizations.length === 1) {
         setActiveOrganizationState(organizations[0]);
       }
     })();
-  }, [status, loadingOrgs, organizations, activeOrganization]);
+  }, [
+    status,
+    loadingOrgs,
+    organizations,
+    activeOrganization,
+    consumePairingContext,
+  ]);
 
   // ── Branch load whenever the active ORG ID changes ─────────
   const activeOrgId = activeOrganization?.id ?? null;
@@ -155,19 +198,24 @@ export function OrganizationProvider({ children }) {
         if (branchAutoSelectDone.current) return;
         branchAutoSelectDone.current = true;
 
+        let restored = null;
         const stored = await readStored();
-        const restored =
-          stored?.organizationId === activeOrgId && stored?.branchId
-            ? list.find((b) => b.id === stored.branchId) || null
-            : null;
+        if (stored?.organizationId === activeOrgId && stored?.branchId) {
+          restored = list.find((b) => b.id === stored.branchId) || null;
+        }
+        // Pairing hint (one-shot): the branch the POS user was on.
+        if (!restored && pendingBranchIdRef.current) {
+          restored =
+            list.find((b) => b.id === pendingBranchIdRef.current) || null;
+          pendingBranchIdRef.current = null;
+        }
 
         if (restored) setActiveBranchState(restored);
         else if (list.length === 1) setActiveBranchState(list[0]);
         else setActiveBranchState(null);
 
-        // View scope: prefer persisted viewBranchId for this org.
-        // `'viewBranchId' in stored` distinguishes "not set" from an
-        // intentional null ("All branches").
+        // View scope: prefer persisted viewBranchId, then restored, then
+        // the single-branch fallback.
         const storedView =
           stored?.organizationId === activeOrgId && 'viewBranchId' in stored
             ? stored.viewBranchId
@@ -206,6 +254,10 @@ export function OrganizationProvider({ children }) {
   useEffect(() => {
     if (status !== 'signedIn') {
       setReady(true);
+      return;
+    }
+    if (!loadedOrgsOnce.current) {
+      setReady(false);
       return;
     }
     if (loadingOrgs || loadingBranches) {

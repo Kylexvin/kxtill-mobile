@@ -1,4 +1,10 @@
 // src/screens/dashboard/DashboardScreen.jsx
+//
+// Home tab. Renders the mobile dashboard from GET .../kxtill/mobile/dashboard.
+// Sections are shown only when the backend returns them (null = hidden).
+//
+// Currency is read from SettingsContext (KxTill setting, falling back to
+// the organization currency), never from the sales payload.
 
 import { useCallback, useMemo, useState } from 'react';
 import {
@@ -18,6 +24,7 @@ import { typography } from '../../styles/typography';
 import { useAuth } from '../../hooks/useAuth';
 import { usePermissions } from '../../hooks/usePermissions';
 import { useNotificationsUnread } from '../../hooks/useNotificationsUnread';
+import { useSettings } from '../../context/SettingsContext';
 import { useOrganizationContext } from '../../context/OrganizationContext';
 import { ROUTES } from '../../constants/routes';
 
@@ -52,7 +59,8 @@ export default function DashboardScreen() {
   const navigation = useNavigation();
   const { user } = useAuth();
   const { isOwner } = usePermissions();
-  const { activeOrganization } = useOrganizationContext();
+  const { activeOrganization, branches: orgBranches } = useOrganizationContext();
+  const { getCurrency } = useSettings();
   const unreadCount = useNotificationsUnread();
 
   const [scopeModalOpen, setScopeModalOpen] = useState(false);
@@ -114,7 +122,8 @@ export default function DashboardScreen() {
     !products.length &&
     !recent.length;
 
-  const currency = sales?.currency || null;
+  // Currency comes from SettingsContext — KxTill setting, then org fallback.
+  const currency = getCurrency();
   const gross = Number(sales?.gross || 0);
   const delta = sales?.deltaPct;
 
@@ -145,13 +154,52 @@ export default function DashboardScreen() {
     navigation.navigate(ROUTES.TAB_NOTIFICATIONS);
   }, [navigation]);
 
-  const onPressAction = useCallback((action) => {
-    Alert.alert(action?.label || 'Action', 'Coming soon.');
-  }, []);
+  const onPressAttention = useCallback(
+    (item) => {
+      navigation.navigate(ROUTES.TAB_NOTIFICATIONS, {
+        scopeBranchId: item?.metadata?.branchId || viewBranchId || null,
+      });
+    },
+    [navigation, viewBranchId]
+  );
 
-  const onPressSeeAll = useCallback((what) => {
-    Alert.alert(what, 'Coming soon.');
-  }, []);
+  const onPressSeeAttention = useCallback(() => {
+    navigation.navigate(ROUTES.TAB_NOTIFICATIONS, {
+      scopeBranchId: viewBranchId || null,
+    });
+  }, [navigation, viewBranchId]);
+
+  const onPressAction = useCallback(
+    (action) => {
+      if (!action) return;
+
+      if (action.id === 'branches') {
+        navigation.navigate(ROUTES.TAB_BUSINESS);
+        return;
+      }
+
+      if (action.id === 'stock') {
+        if (viewBranchId) {
+          navigation.navigate(ROUTES.TAB_BUSINESS, {
+            screen: ROUTES.BRANCH_STOCK,
+            params: {
+              branchId: viewBranchId,
+              branchName:
+                orgBranches?.find((b) => b.id === viewBranchId)?.name || null,
+            },
+          });
+          return;
+        }
+        navigation.navigate(ROUTES.TAB_BUSINESS);
+        return;
+      }
+
+    
+    },
+    [navigation, viewBranchId, orgBranches]
+  );
+
+
 
   // ── Early returns ───────────────────────────────────────────────
   if (loading && !data && !error) {
@@ -233,11 +281,12 @@ export default function DashboardScreen() {
               title="Needs attention"
               badge={String(attention.length)}
               action={searching ? null : 'See all'}
-              onAction={
-                searching ? null : () => onPressSeeAll('Needs attention')
-              }
+              onAction={searching ? null : onPressSeeAttention}
             >
-              <AttentionList items={attention} />
+              <AttentionList
+                items={attention}
+                onPressItem={onPressAttention}
+              />
             </Section>
           ) : null}
 
@@ -248,13 +297,10 @@ export default function DashboardScreen() {
           ) : null}
 
           {branches.length > 0 ? (
-            <Section
-              title="Branch performance"
-              action={searching ? null : 'Compare'}
-              onAction={
-                searching ? null : () => onPressSeeAll('Branch performance')
-              }
-            >
+<Section
+  title="Branch performance"
+
+>
               <BranchPerformance currency={currency} branches={branches} />
             </Section>
           ) : null}
@@ -274,10 +320,7 @@ export default function DashboardScreen() {
           {products.length > 0 ? (
             <Section
               title="Top products"
-              action={searching ? null : 'View all'}
-              onAction={
-                searching ? null : () => onPressSeeAll('Top products')
-              }
+           
             >
               <TopProducts currency={currency} products={products} />
             </Section>

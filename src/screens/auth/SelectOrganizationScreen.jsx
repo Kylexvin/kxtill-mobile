@@ -320,13 +320,12 @@ export default function SelectOrganizationScreen() {
       {organizations.map((item, index) => {
         const owner = isOwnerOrg(item);
         const initial = item.name?.trim()?.charAt(0)?.toUpperCase() || '?';
-        const meta = [
-          item.currency,
-          item.country,
-          item.timezone?.split?.('/')?.[1]?.replaceAll?.('_', ' '),
-        ]
-          .filter(Boolean)
-          .join(' · ');
+const meta = [
+  item.country,
+  item.timezone?.split?.('/')?.[1]?.replaceAll?.('_', ' '),
+]
+  .filter(Boolean)
+  .join(' · ');
 
         return (
           <View key={item.id}>

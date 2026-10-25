@@ -9,6 +9,9 @@
 //   - refs are the source of truth for the interceptor; state mirrors them.
 //   - Sign-out and token-expiry paths clear LOCAL state first, then fire
 //     the server revoke fire-and-forget.
+//   - pairingContext is carried through applySession and restored on cold
+//     start, so OrganizationContext can honour the POS-side org/branch
+//     selection on first hydrate after pairing.
 
 import {
   createContext,
@@ -22,6 +25,7 @@ import {
 import * as SecureStore from 'expo-secure-store';
 import * as WebBrowser from 'expo-web-browser';
 import { configureApi } from '../services/api';
+import pairingService from '../services/pairing.service';
 import authService from '../services/auth.service';
 import { config } from '../constants/config';
 
@@ -60,7 +64,7 @@ function friendlyAuthError(e) {
 }
 
 export function AuthProvider({ children }) {
-  const [status, setStatus] = useState('loading'); // loading | signedIn | signedOut
+  const [status, setStatus] = useState('loading');
   const [user, setUser] = useState(null);
   const [accessToken, setAccessTokenState] = useState(null);
   const [refreshToken, setRefreshTokenState] = useState(null);
@@ -71,6 +75,10 @@ export function AuthProvider({ children }) {
   // Refs are the canonical token holders — the interceptor reads them.
   const accessTokenRef = useRef(null);
   const refreshTokenRef = useRef(null);
+
+  // Pairing context: a one-shot hint from the POS. OrganizationContext
+  // consumes it during its first hydrate and it is not re-used.
+  const pairingContextRef = useRef(null);
 
   const setTokens = useCallback((access, refresh) => {
     accessTokenRef.current = access ?? null;
@@ -102,12 +110,16 @@ export function AuthProvider({ children }) {
       setUser(session.user || null);
       setTokens(session.accessToken, session.refreshToken);
       setOrganizations(session.organizations || []);
+      // Carry the pairing hint so OrganizationContext can honour the
+      // POS-selected org/branch on first hydrate.
+      pairingContextRef.current = session.pairingContext || null;
       setStatus('signedIn');
       await persist({
         user: session.user || null,
         accessToken: session.accessToken || null,
         refreshToken: session.refreshToken || null,
         organizations: session.organizations || [],
+        pairingContext: session.pairingContext || null,
       });
     },
     [persist, setTokens]
@@ -133,6 +145,7 @@ export function AuthProvider({ children }) {
     setUser(null);
     setTokens(null, null);
     setOrganizations([]);
+    pairingContextRef.current = null;
     setStatus('signedOut');
     setError(null);
     await clearPersisted();
@@ -157,11 +170,33 @@ export function AuthProvider({ children }) {
 
   const signIn = useCallback(
     async (email, password) => {
-      if (isSubmitting) return null; // dedupe double-tap
+      if (isSubmitting) return null;
       setError(null);
       setIsSubmitting(true);
       try {
         const session = await authService.login(email, password);
+        if (!session?.accessToken || !session?.refreshToken) {
+          throw new Error('Invalid response from server');
+        }
+        await applySession(session);
+        return session;
+      } catch (e) {
+        setError(friendlyAuthError(e));
+        throw e;
+      } finally {
+        setIsSubmitting(false);
+      }
+    },
+    [applySession, isSubmitting]
+  );
+
+  const signInWithPairing = useCallback(
+    async (token) => {
+      if (isSubmitting) return null;
+      setError(null);
+      setIsSubmitting(true);
+      try {
+        const session = await pairingService.redeem(token);
         if (!session?.accessToken || !session?.refreshToken) {
           throw new Error('Invalid response from server');
         }
@@ -217,9 +252,6 @@ export function AuthProvider({ children }) {
   );
 
   // ── API interceptor — install ONCE ─────────────────────────
-  // We deliberately capture `forceSignOut` via a ref so this effect can
-  // have an empty dep array. Re-installing the interceptor mid-session
-  // was the source of stale-token bugs.
   const forceSignOutRef = useRef(forceSignOut);
   useEffect(() => {
     forceSignOutRef.current = forceSignOut;
@@ -236,22 +268,18 @@ export function AuthProvider({ children }) {
             await authService.refresh(rt);
           if (!newToken) return null;
           setTokens(newToken, newRt ?? rt);
-          // Persist silently — do not disturb status.
           patchPersistedUser({
             accessToken: newToken,
             refreshToken: newRt ?? rt,
           });
           return newToken;
         } catch (err) {
-          // Offline: keep the session, let the caller decide.
           if (!err?.response) return null;
-          // Server rejected the refresh token — hard sign-out.
           await forceSignOutRef.current();
           return null;
         }
       },
       expired: () => {
-        // Refresh already exhausted the token. Local-only wipe.
         forceSignOutRef.current();
       },
     });
@@ -278,6 +306,10 @@ export function AuthProvider({ children }) {
         setUser(stored.user || null);
         setTokens(stored.accessToken, stored.refreshToken);
         setOrganizations(stored.organizations || []);
+        // Restore the pairing hint, if the previous launch paired. It may
+        // be a stale hint (org already persisted as activeOrganization in
+        // SecureStore) — OrganizationContext only uses it as a fallback.
+        pairingContextRef.current = stored.pairingContext || null;
         setStatus('signedIn');
 
         // Background refresh of profile — never blocks the UI.
@@ -300,6 +332,16 @@ export function AuthProvider({ children }) {
 
   const clearError = useCallback(() => setError(null), []);
 
+  // ── pairing context accessor ───────────────────────────────
+  // One-shot: OrganizationContext calls this during its first hydrate.
+  // After that, normal persistence (activeOrganization in SecureStore)
+  // takes over. The ref stays null so no repeated consumption.
+  const consumePairingContext = useCallback(() => {
+    const ctx = pairingContextRef.current;
+    pairingContextRef.current = null;
+    return ctx;
+  }, []);
+
   const value = useMemo(
     () => ({
       status,
@@ -307,6 +349,7 @@ export function AuthProvider({ children }) {
       accessToken,
       refreshToken,
       organizations,
+      signInWithPairing,
       isSubmitting,
       error,
       signIn,
@@ -314,6 +357,7 @@ export function AuthProvider({ children }) {
       signOut,
       signOutAllDevices,
       clearError,
+      consumePairingContext,
       isAuthenticated: status === 'signedIn',
     }),
     [
@@ -323,12 +367,14 @@ export function AuthProvider({ children }) {
       refreshToken,
       organizations,
       isSubmitting,
+      signInWithPairing,
       error,
       signIn,
       beginOAuth,
       signOut,
       signOutAllDevices,
       clearError,
+      consumePairingContext,
     ]
   );
 

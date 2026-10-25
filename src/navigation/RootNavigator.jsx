@@ -38,14 +38,12 @@ export default function RootNavigator() {
     return <SplashScreen />;
   }
 
-  if (status === 'signedOut') {
-    if (!onboardingDone) {
-      return (
-        <OnboardingScreen onDone={() => { /* context flips done */ }} />
-      );
-    }
-    return <AuthContainer theme={c} />;
+if (status === 'signedOut') {
+  if (!onboardingDone) {
+    return <OnboardingScreen onDone={() => { /* context flips done */ }} />;
   }
+  return <AuthContainer theme={c} />;
+}
 
   // ── signedIn ────────────────────────────────────────────────
   // At this point `orgReady === true`, so activeOrganization / activeBranch

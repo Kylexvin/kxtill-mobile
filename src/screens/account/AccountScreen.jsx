@@ -8,6 +8,11 @@
 //   - Working HSV colour picker (drag to pick; no manual typing required)
 //   - Fixed row layout (icon chip centred with text, truncation-safe)
 //   - Hex input kept as a fallback with explicit Apply
+//
+// v4:
+//   - Business row is a selector when the user belongs to 2+ orgs.
+//     Tapping opens OrgPickerModal, which calls setActiveOrganization(id).
+//     The whole app context re-fetches on switch.
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
@@ -36,6 +41,7 @@ import { useAuth } from '../../hooks/useAuth';
 import { ROUTES } from '../../constants/routes';
 import { useOrganizationContext } from '../../context/OrganizationContext';
 import { usePermissions } from '../../hooks/usePermissions';
+import OrgPickerModal from './OrgPickerModal';
 
 const TOOTH = 16;
 const MODES = [
@@ -112,12 +118,17 @@ export default function AccountScreen() {
   const insets = useSafeAreaInsets();
   const navigation = useNavigation();
   const { user, signOut } = useAuth();
-  const { activeOrganization, activeBranch, organizations } =
-    useOrganizationContext();
+  const {
+    activeOrganization,
+    activeBranch,
+    organizations,
+    setActiveOrganization,
+  } = useOrganizationContext();
   const { isOwner, permissions } = usePermissions();
 
   const [pickerOpen, setPickerOpen] = useState(false);
   const [hexDraft, setHexDraft] = useState('');
+  const [orgPickerOpen, setOrgPickerOpen] = useState(false);
 
   const enter = useRef(new Animated.Value(0)).current;
   useEffect(() => {
@@ -159,6 +170,8 @@ export default function AccountScreen() {
     }
     setHexDraft('');
   };
+
+  const canSwitchOrg = (organizations?.length || 0) > 1;
 
   return (
     <View style={styles.root}>
@@ -360,42 +373,6 @@ export default function AccountScreen() {
             {pickerOpen ? (
               <ColorPicker c={c} value={accent} onChange={setAccent} />
             ) : null}
-
-            {/* hex fallback */}
-            <View
-              style={[
-                styles.hexRow,
-                { borderBottomColor: c.borderStrong },
-              ]}
-            >
-              {/* <Text style={[styles.hash, { color: c.textMuted }]}>#</Text>
-              <TextInput
-                style={[styles.hexInput, { color: c.textPrimary }]}
-                value={hexDraft}
-                onChangeText={setHexDraft}
-                onSubmitEditing={onCommitHex}
-                onBlur={onCommitHex}
-                placeholder={accent.replace('#', '').toUpperCase()}
-                placeholderTextColor={c.textMuted}
-                autoCapitalize="characters"
-                autoCorrect={false}
-                maxLength={7}
-                selectionColor={c.primary}
-                accessibilityLabel="Enter hex colour"
-              /> */}
-              {/* <Pressable
-                onPress={onCommitHex}
-                style={[styles.hexApply, { backgroundColor: c.primary }]}
-                accessibilityRole="button"
-                accessibilityLabel="Apply hex colour"
-              >
-                <Ionicons
-                  name="checkmark"
-                  size={16}
-                  color={c.textOnPrimary}
-                />
-              </Pressable> */}
-            </View>
           </View>
 
           {/* Context */}
@@ -408,10 +385,14 @@ export default function AccountScreen() {
               label="Business"
               value={activeOrganization?.name || '—'}
               sub={
-                organizations?.length > 1
-                  ? `${organizations.length} businesses available`
+                canSwitchOrg
+                  ? `${organizations.length} businesses · tap to switch`
                   : null
               }
+              onPress={
+                canSwitchOrg ? () => setOrgPickerOpen(true) : undefined
+              }
+              actionLabel={canSwitchOrg ? 'Switch' : null}
             />
             <Divider styles={styles} />
             <Row
@@ -433,39 +414,39 @@ export default function AccountScreen() {
               actionLabel="Connect"
             />
           </View>
-{/* Access */}
-<Text style={styles.sectionLabel}>ACCESS</Text>
-<View style={styles.card}>
-  <Row
-    c={c}
-    styles={styles}
-    icon={isOwner ? 'shield-checkmark-outline' : 'key-outline'}
-    label="Role"
-    value={isOwner ? 'Owner' : 'Member'}
-  />
-  <Divider styles={styles} />
-  <Row
-    c={c}
-    styles={styles}
-    icon="lock-open-outline"
-    label="Permissions"
-    value={isOwner ? 'Full access' : `${permCount} permissions`}
-  />
-  {isOwner ? (
-    <>
-      <Divider styles={styles} />
-      <Row
-        c={c}
-        styles={styles}
-        icon="settings-outline"
-        label="KxTill"
-        value="Product settings"
-        onPress={() => navigation.navigate(ROUTES.KXTILL_SETTINGS)}
-      />
-    </>
-  ) : null}
-</View>
-          
+
+          {/* Access */}
+          <Text style={styles.sectionLabel}>ACCESS</Text>
+          <View style={styles.card}>
+            <Row
+              c={c}
+              styles={styles}
+              icon={isOwner ? 'shield-checkmark-outline' : 'key-outline'}
+              label="Role"
+              value={isOwner ? 'Owner' : 'Member'}
+            />
+            <Divider styles={styles} />
+            <Row
+              c={c}
+              styles={styles}
+              icon="lock-open-outline"
+              label="Permissions"
+              value={isOwner ? 'Full access' : `${permCount} permissions`}
+            />
+            {isOwner ? (
+              <>
+                <Divider styles={styles} />
+                <Row
+                  c={c}
+                  styles={styles}
+                  icon="settings-outline"
+                  label="KxTill"
+                  value="Product settings"
+                  onPress={() => navigation.navigate(ROUTES.KXTILL_SETTINGS)}
+                />
+              </>
+            ) : null}
+          </View>
 
           {/* About */}
           <Text style={styles.sectionLabel}>ABOUT</Text>
@@ -501,6 +482,14 @@ export default function AccountScreen() {
           <Text style={styles.footer}>KxTill Mobile · by KXBYTE</Text>
         </Animated.View>
       </ScrollView>
+
+      <OrgPickerModal
+        visible={orgPickerOpen}
+        organizations={organizations}
+        currentOrgId={activeOrganization?.id || null}
+        onPick={(id) => setActiveOrganization(id)}
+        onClose={() => setOrgPickerOpen(false)}
+      />
     </View>
   );
 }
@@ -512,7 +501,6 @@ function ColorPicker({ c, value, onChange }) {
   const hsvRef = useRef(hsv);
   hsvRef.current = hsv;
 
-  // resync only when the external accent truly differs
   useEffect(() => {
     const currentHex = hsvToHex(
       hsvRef.current.h,
@@ -530,7 +518,6 @@ function ColorPicker({ c, value, onChange }) {
     onChange(hsvToHex(next.h, next.s, next.v));
   };
 
-  // ── SV square ──
   const svRef = useRef(null);
   const svSize = useRef({ w: 1, h: 1 });
   const svOrigin = useRef({ x: 0, y: 0 });
@@ -563,7 +550,6 @@ function ColorPicker({ c, value, onChange }) {
     })
   ).current;
 
-  // ── Hue slider ──
   const hueRef = useRef(null);
   const hueSize = useRef({ w: 1 });
   const hueOrigin = useRef({ x: 0 });
@@ -593,7 +579,6 @@ function ColorPicker({ c, value, onChange }) {
     })
   ).current;
 
-  // mirrored sizes so the thumbs re-render after layout
   const [svW, setSvW] = useState(1);
   const [svH, setSvH] = useState(1);
   const [hueW, setHueW] = useState(1);
@@ -605,7 +590,6 @@ function ColorPicker({ c, value, onChange }) {
 
   return (
     <View style={pickerStyles.wrap}>
-      {/* SV square */}
       <View
         ref={svRef}
         onLayout={(e) => {
@@ -615,10 +599,7 @@ function ColorPicker({ c, value, onChange }) {
           svSize.current = { w: width || 1, h: height || 1 };
           requestAnimationFrame(measureSV);
         }}
-        style={[
-          pickerStyles.svWrap,
-          { borderColor: c.border },
-        ]}
+        style={[pickerStyles.svWrap, { borderColor: c.border }]}
         {...svPan.panHandlers}
       >
         <View
@@ -648,7 +629,6 @@ function ColorPicker({ c, value, onChange }) {
         />
       </View>
 
-      {/* Hue slider */}
       <View
         ref={hueRef}
         onLayout={(e) => {
@@ -822,7 +802,6 @@ const makeStyles = (c) =>
       backgroundColor: c.hero,
     },
 
-    // Hero
     hero: {
       backgroundColor: c.hero,
       paddingHorizontal: 22,
@@ -878,7 +857,6 @@ const makeStyles = (c) =>
       letterSpacing: 0.3,
     },
 
-    // identity: avatar BESIDE text
     identity: { flexDirection: 'row', alignItems: 'center', gap: 16 },
     avatar: {
       width: 72,
@@ -927,7 +905,6 @@ const makeStyles = (c) =>
       flexShrink: 1,
     },
 
-    // Body
     body: { paddingHorizontal: 20, paddingTop: 6 },
     sectionLabel: {
       color: c.textMuted,
@@ -962,7 +939,6 @@ const makeStyles = (c) =>
       marginTop: 16,
     },
 
-    // Mode segmented control
     segment: {
       flexDirection: 'row',
       backgroundColor: c.surfaceElevated,
@@ -984,7 +960,6 @@ const makeStyles = (c) =>
     segText: { color: c.textSecondary, fontSize: 13, fontWeight: '700' },
     segTextActive: { color: c.textOnPrimary },
 
-    // Accent swatches
     swatchHeader: {
       flexDirection: 'row',
       alignItems: 'center',
@@ -1034,7 +1009,6 @@ const makeStyles = (c) =>
       borderColor: c.borderStrong,
     },
 
-    // Hex fallback
     hexRow: {
       flexDirection: 'row',
       alignItems: 'center',
@@ -1058,7 +1032,6 @@ const makeStyles = (c) =>
       marginBottom: 4,
     },
 
-    // Rows
     row: {
       flexDirection: 'row',
       alignItems: 'flex-start',
@@ -1097,7 +1070,6 @@ const makeStyles = (c) =>
     rowActionText: { color: c.link, fontSize: 13, fontWeight: '700' },
     divider: { height: 1, marginLeft: 50, backgroundColor: c.border },
 
-    // Sign out
     signOutBtn: {
       flexDirection: 'row',
       alignItems: 'center',

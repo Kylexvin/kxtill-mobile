@@ -13,17 +13,17 @@ export default function AuthNavigator() {
 
   return (
     <Stack.Navigator
+      initialRouteName={ROUTES.PAIR_DEVICE}
       screenOptions={{
         headerShown: false,
         contentStyle: { backgroundColor: c.background },
       }}
     >
-      <Stack.Screen name={ROUTES.LOGIN} component={LoginScreen} />
       <Stack.Screen
         name={ROUTES.PAIR_DEVICE}
         component={PairDeviceScreen}
-        options={{ presentation: 'fullScreenModal' }}
       />
+      <Stack.Screen name={ROUTES.LOGIN} component={LoginScreen} />
     </Stack.Navigator>
   );
 }

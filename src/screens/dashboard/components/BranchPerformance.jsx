@@ -44,7 +44,9 @@ function BranchPerformanceBase({ currency, branches }) {
                 ]}
               />
             </View>
-            <Text style={styles.trend}>{b.transactions} tx</Text>
+            <Text style={styles.trend}>
+  {b.transactions} {b.transactions === 1 ? 'sale' : 'sales'}
+</Text>
           </View>
         </View>
       ))}

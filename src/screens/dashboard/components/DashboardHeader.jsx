@@ -1,25 +1,19 @@
 // src/screens/dashboard/components/DashboardHeader.jsx
 //
-// Hero band, rebuilt. No dropdown: scope is a row of chips you can see and
-// tap in one go. Layout:
+// Hero band. The KxTill logo is the main mark; the signed-in user's avatar
+// sits on its top-right corner as a small cut-out badge.
 //
-//   [avatar]  ☀ Good morning            [bell•]
-//             Kylex
-//
+//   ┌────┐ ◖K◗   ☀ Good morning              [bell•]
+//   │logo│       Kylex
+//   └────┘
 //   [ All branches ] [ Nairobi CBD ] [ Nakuru ] …   ← scope rail
-//
 //   [ 🔍  Search products, branches, activity   ✕ ]
 //
 // Props are primitives + stable callbacks so React.memo stays effective.
-// Pass `scopes` as a memoised array.
-//
-// New optional props (everything else is unchanged):
-//   scopes         [{ id, label }]   chips for the rail (first = org-wide)
-//   activeScopeId  id of the selected chip
-//   onSelectScope  (id) => void
-//   unreadCount    number, shows a badge on the bell
+// Optional props: scopes [{id,label}], activeScopeId, onSelectScope,
+// unreadCount, onPressAvatar (e.g. go to the Account tab).
 // Without `scopes`, canSeeOrgWide users get a single "Switch" bar that calls
-// onOpenScope, as before. Members who can't pick org-wide see a quiet label.
+// onOpenScope. Members who can't pick org-wide see a quiet label.
 
 import { memo, useMemo } from 'react';
 import {
@@ -29,12 +23,14 @@ import {
   TouchableOpacity,
   Pressable,
   ScrollView,
+  Image,
   StyleSheet,
 } from 'react-native';
 import Ionicons from '@react-native-vector-icons/ionicons';
 import { useTheme } from '../../../styles/ThemeProvider';
 import { spacing, radius } from '../../../styles/spacing';
 import { typography } from '../../../styles/typography';
+import { BRAND_ICONS } from '../../../constants/config';
 import { timeGreeting } from './utils';
 
 const dayIcon = () => {
@@ -58,6 +54,7 @@ function DashboardHeaderBase({
   onQueryChange,
   onClearQuery,
   onPressBell,
+  onPressAvatar,
   unreadCount = 0,
 }) {
   const { theme: c } = useTheme();
@@ -74,8 +71,25 @@ function DashboardHeaderBase({
 
       {/* ── Identity row ───────────────────────────── */}
       <View style={styles.header}>
-        <View style={styles.avatar}>
-          <Text style={styles.avatarText}>{initial}</Text>
+        {/* Logo is the mark; the user's avatar badges its top-right corner */}
+        <View style={styles.markWrap}>
+          <View style={styles.logoTile}>
+            <Image
+              source={BRAND_ICONS.kxtill}
+              style={styles.logo}
+              resizeMode="contain"
+            />
+          </View>
+          <Pressable
+            style={styles.avatarBadge}
+            onPress={onPressAvatar}
+            disabled={!onPressAvatar}
+            hitSlop={6}
+            accessibilityRole={onPressAvatar ? 'button' : undefined}
+            accessibilityLabel={`Account: ${firstName || 'You'}`}
+          >
+            <Text style={styles.avatarBadgeText}>{initial}</Text>
+          </Pressable>
         </View>
 
         <View style={styles.headerText}>
@@ -106,8 +120,8 @@ function DashboardHeaderBase({
             color={c.textOnPrimary}
           />
           {unreadCount > 0 ? (
-            <View style={styles.badge}>
-              <Text style={styles.badgeText}>
+            <View style={styles.bellBadge}>
+              <Text style={styles.bellBadgeText}>
                 {unreadCount > 9 ? '9+' : unreadCount}
               </Text>
             </View>
@@ -152,9 +166,6 @@ function DashboardHeaderBase({
           accessibilityRole="button"
           accessibilityLabel={`Viewing ${scopeLabel}. Switch scope`}
         >
-          {/* <View style={styles.switchIcon}>
-            <Ionicons name="storefront" size={15} color={c.hero} />
-          </View> */}
           <View style={styles.flex}>
             <Text style={styles.switchKicker}>VIEWING</Text>
             <Text style={styles.switchValue} numberOfLines={1}>
@@ -207,6 +218,9 @@ function DashboardHeaderBase({
   );
 }
 
+const LOGO_TILE = 56;
+const BADGE = 26;
+
 const makeStyles = (c) =>
   StyleSheet.create({
     flex: { flex: 1, minWidth: 0 },
@@ -215,7 +229,7 @@ const makeStyles = (c) =>
     band: {
       backgroundColor: c.hero,
       paddingHorizontal: spacing.xl,
-      paddingTop: spacing.md,
+      paddingTop: spacing.lg,
       borderBottomLeftRadius: 32,
       borderBottomRightRadius: 32,
       overflow: 'hidden',
@@ -261,15 +275,41 @@ const makeStyles = (c) =>
       alignItems: 'center',
       gap: spacing.md,
     },
-    avatar: {
-      width: 50,
-      height: 50,
+    // wrapper is a bit larger than the tile so the badge isn't clipped
+    markWrap: {
+      width: LOGO_TILE + BADGE / 2,
+      height: LOGO_TILE + BADGE / 2,
+      justifyContent: 'flex-end',
+      alignItems: 'flex-start',
+    },
+    logoTile: {
+      width: LOGO_TILE,
+      height: LOGO_TILE,
       borderRadius: 18,
-      backgroundColor: c.textOnPrimary,
+      backgroundColor: c.surface,
       alignItems: 'center',
       justifyContent: 'center',
     },
-    avatarText: { ...typography.h3, color: c.hero, fontWeight: '900' },
+    logo: { width: 34, height: 34 },
+    avatarBadge: {
+      position: 'absolute',
+      top: 0,
+      right: 0,
+      width: BADGE + 5,
+      height: BADGE + 5,
+      borderRadius: (BADGE + 5) / 2,
+      backgroundColor: c.textOnPrimary,
+      // ring in the hero colour gives the "cut-out" edge against the tile
+      borderWidth: 2.5,
+      borderColor: c.hero,
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+    avatarBadgeText: {
+      color: c.hero,
+      fontSize: 12,
+      fontWeight: '900',
+    },
     headerText: { flex: 1, minWidth: 0 },
     greetRow: { flexDirection: 'row', alignItems: 'center', gap: 5 },
     greeting: { ...typography.caption, color: c.onPrimaryMuted },
@@ -288,7 +328,7 @@ const makeStyles = (c) =>
       alignItems: 'center',
       justifyContent: 'center',
     },
-    badge: {
+    bellBadge: {
       position: 'absolute',
       top: -4,
       right: -4,
@@ -300,7 +340,7 @@ const makeStyles = (c) =>
       alignItems: 'center',
       justifyContent: 'center',
     },
-    badgeText: { color: c.hero, fontSize: 10, fontWeight: '900' },
+    bellBadgeText: { color: c.hero, fontSize: 10, fontWeight: '900' },
 
     // Scope rail
     rail: { marginHorizontal: -spacing.xl, marginTop: spacing.lg },
@@ -330,18 +370,11 @@ const makeStyles = (c) =>
       gap: spacing.md,
       marginTop: spacing.lg,
       padding: 10,
+      paddingLeft: 14,
       paddingRight: 14,
       borderRadius: 18,
       borderWidth: 1,
       borderColor: c.onPrimaryBorder,
-    },
-    switchIcon: {
-      width: 34,
-      height: 34,
-      borderRadius: 12,
-      backgroundColor: c.textOnPrimary,
-      alignItems: 'center',
-      justifyContent: 'center',
     },
     switchKicker: {
       color: c.onPrimaryMuted,
