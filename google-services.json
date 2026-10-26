@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "307192839210",
+    "project_id": "kxtill-242c9",
+    "storage_bucket": "kxtill-242c9.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:307192839210:android:f93d524e7b994bd7b89753",
+        "android_client_info": {
+          "package_name": "co.ke.kxbyte.kxtill"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyAWTKtylabt3XlWSxD7Xj_xEBnBHlpm9eo"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

@@ -13,8 +13,15 @@
 // Persistence: { organizationId, branchId, viewBranchId } as one blob.
 //
 // Hydration gate:
-//   - `ready` stays false until the org list has been fetched at least once
-//     AND any pending auto-selects have completed.
+//   - `ready` is MONOTONIC. It starts false, flips true exactly once,
+//     and never goes back to false — that's what prevents the RootNavigator
+//     from oscillating back to SplashScreen mid-hydration and flashing the
+//     picker screens.
+//   - `ready` does not flip true until:
+//       * the org list has loaded at least once,
+//       * org auto-select has fired (if an org list exists),
+//       * the branch effect has STARTED for the selected org, and
+//       * branch auto-select has finished (if branches exist).
 
 import {
   createContext,
@@ -69,6 +76,10 @@ export function OrganizationProvider({ children }) {
   const orgAutoSelectDone = useRef(false);
   const branchAutoSelectDone = useRef(false);
   const loadedOrgsOnce = useRef(false);
+  // Tracks which org the branch effect has already started for. Used by
+  // the ready gate to avoid flipping true between org selection and
+  // branch loading.
+  const branchFetchStartedForOrg = useRef(null);
   // One-shot branch hint from the POS pairing flow.
   const pendingBranchIdRef = useRef(null);
 
@@ -86,7 +97,9 @@ export function OrganizationProvider({ children }) {
       orgAutoSelectDone.current = false;
       branchAutoSelectDone.current = false;
       loadedOrgsOnce.current = false;
+      branchFetchStartedForOrg.current = null;
       pendingBranchIdRef.current = null;
+      setReady(false);
       SecureStore.deleteItemAsync(STORAGE_KEY).catch(() => {});
       return;
     }
@@ -130,7 +143,7 @@ export function OrganizationProvider({ children }) {
     orgAutoSelectDone.current = true;
 
     (async () => {
-      // 1) POS pairing hint — highest priority on first hydrate after pairing.
+      // 1) POS pairing hint
       const pairingCtx = consumePairingContext?.();
       if (pairingCtx?.organizationId) {
         const found = organizations.find(
@@ -139,7 +152,6 @@ export function OrganizationProvider({ children }) {
         if (found) {
           setActiveOrganizationState(found);
           pendingBranchIdRef.current = pairingCtx.branchId || null;
-          // Persist so the next cold start does not need the hint again.
           await writeStored({
             organizationId: found.id,
             branchId: pairingCtx.branchId || undefined,
@@ -148,10 +160,12 @@ export function OrganizationProvider({ children }) {
         }
       }
 
-      // 2) Persisted org from a prior session
+      // 2) Persisted org
       const stored = await readStored();
       if (stored?.organizationId) {
-        const found = organizations.find((o) => o.id === stored.organizationId);
+        const found = organizations.find(
+          (o) => o.id === stored.organizationId
+        );
         if (found) {
           setActiveOrganizationState(found);
           return;
@@ -181,8 +195,13 @@ export function OrganizationProvider({ children }) {
       setActiveBranchState(null);
       setViewBranchIdState(null);
       branchAutoSelectDone.current = false;
+      branchFetchStartedForOrg.current = null;
       return;
     }
+
+    // Mark this org as having its branch fetch started — the ready gate
+    // waits on this before flipping true.
+    branchFetchStartedForOrg.current = activeOrgId;
 
     let cancelled = false;
     setLoadingBranches(true);
@@ -203,7 +222,7 @@ export function OrganizationProvider({ children }) {
         if (stored?.organizationId === activeOrgId && stored?.branchId) {
           restored = list.find((b) => b.id === stored.branchId) || null;
         }
-        // Pairing hint (one-shot): the branch the POS user was on.
+        // Pairing hint (one-shot).
         if (!restored && pendingBranchIdRef.current) {
           restored =
             list.find((b) => b.id === pendingBranchIdRef.current) || null;
@@ -214,8 +233,6 @@ export function OrganizationProvider({ children }) {
         else if (list.length === 1) setActiveBranchState(list[0]);
         else setActiveBranchState(null);
 
-        // View scope: prefer persisted viewBranchId, then restored, then
-        // the single-branch fallback.
         const storedView =
           stored?.organizationId === activeOrgId && 'viewBranchId' in stored
             ? stored.viewBranchId
@@ -250,34 +267,36 @@ export function OrganizationProvider({ children }) {
     };
   }, [status, activeOrgId]);
 
-  // ── Hydration gate ─────────────────────────────────────────
+  // ── Hydration gate (monotonic) ─────────────────────────────
+  // Once `ready` flips true, it never goes back to false. That is what
+  // keeps RootNavigator from oscillating back to SplashScreen mid-hydration.
   useEffect(() => {
+    if (ready) return;
+
     if (status !== 'signedIn') {
       setReady(true);
       return;
     }
-    if (!loadedOrgsOnce.current) {
-      setReady(false);
-      return;
-    }
-    if (loadingOrgs || loadingBranches) {
-      setReady(false);
-      return;
-    }
+    if (!loadedOrgsOnce.current) return;
+    if (loadingOrgs || loadingBranches) return;
+
     if (organizations.length > 0 && !activeOrganization) {
-      if (!orgAutoSelectDone.current) {
-        setReady(false);
-        return;
+      if (!orgAutoSelectDone.current) return;
+    }
+
+    if (activeOrganization) {
+      // Wait for the branch effect to have started for this org. Otherwise
+      // RootNavigator could decide "no activeBranch → show SelectBranchScreen"
+      // before we've even fetched the branch list.
+      if (branchFetchStartedForOrg.current !== activeOrganization.id) return;
+      if (branches.length > 0 && !activeBranch) {
+        if (!branchAutoSelectDone.current) return;
       }
     }
-    if (activeOrganization && branches.length > 0 && !activeBranch) {
-      if (!branchAutoSelectDone.current) {
-        setReady(false);
-        return;
-      }
-    }
+
     setReady(true);
   }, [
+    ready,
     status,
     loadingOrgs,
     loadingBranches,
@@ -318,7 +337,9 @@ export function OrganizationProvider({ children }) {
         branchId:
           stored?.organizationId === org.id ? stored.branchId : undefined,
         viewBranchId:
-          stored?.organizationId === org.id ? stored.viewBranchId : undefined,
+          stored?.organizationId === org.id
+            ? stored.viewBranchId
+            : undefined,
       });
     },
     [organizations]

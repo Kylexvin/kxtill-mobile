@@ -1,19 +1,19 @@
 // src/screens/onboarding/OnboardingScreen.jsx
 //
-// Three slides, one benefit each:
-//   1. Visibility  — see the business at a glance
-//   2. Alerts      — know when it matters
-//   3. Branches    — every branch, one view
+// Three slides, one benefit each.
 //
-// Dark background, KxTill orange accents, restrained motion.
-// Horizontal paging via ScrollView + pagingEnabled. No gesture-handler.
-// Respects reduce-motion (accessibility setting) by skipping entrance
-// animations when enabled.
+// v3 — brand header:
+//   - Logo chip + "KxTill / by KXBYTE" wordmark on the left of the header,
+//     matching Login / SelectOrganization / SelectBranch.
+//   - Slide counter (01 / 03) on the right.
+//   - All interactivity from v2 preserved (tappable dots, first-visit-only
+//     counters, animated counter fade, reduce-motion support).
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   View,
   Text,
+  Image,
   TouchableOpacity,
   StyleSheet,
   ScrollView,
@@ -21,12 +21,17 @@ import {
   Animated,
   Easing,
   AccessibilityInfo,
-  Platform,
 } from 'react-native';
-import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
+import {
+  SafeAreaView,
+  useSafeAreaInsets,
+} from 'react-native-safe-area-context';
 import Ionicons from '@react-native-vector-icons/ionicons';
 import { useTheme } from '../../styles/ThemeProvider';
 import { useOnboarding } from '../../context/OnboardingContext';
+import { BRAND_ICONS } from '../../constants/config';
+
+const MOCK_CURRENCY = 'KES';
 
 const SLIDES = [
   {
@@ -69,7 +74,7 @@ function OverviewMock({ c, styles, animate }) {
         TODAY'S PERFORMANCE
       </Text>
       <Text style={[styles.mockValue, { color: c.textPrimary }]}>
-        KES {sales.toLocaleString()}
+        {MOCK_CURRENCY} {sales.toLocaleString()}
       </Text>
       <View style={styles.mockRow}>
         <Ionicons name="trending-up" size={16} color={c.success} />
@@ -114,7 +119,9 @@ function AlertsMock({ c, styles, animate }) {
           a1,
         ]}
       >
-        <View style={[styles.alertIconWrap, { backgroundColor: c.dangerSoft }]}>
+        <View
+          style={[styles.alertIconWrap, { backgroundColor: c.dangerSoft }]}
+        >
           <Ionicons name="alert-circle" size={18} color={c.danger} />
         </View>
         <View style={{ flex: 1 }}>
@@ -140,7 +147,9 @@ function AlertsMock({ c, styles, animate }) {
           a2,
         ]}
       >
-        <View style={[styles.alertIconWrap, { backgroundColor: c.primarySoft }]}>
+        <View
+          style={[styles.alertIconWrap, { backgroundColor: c.primarySoft }]}
+        >
           <Ionicons name="time-outline" size={18} color={c.primary} />
         </View>
         <View style={{ flex: 1 }}>
@@ -181,7 +190,7 @@ function BranchesMock({ c, styles, animate }) {
           </Text>
         </View>
         <Text style={[styles.branchValue, { color: c.textPrimary }]}>
-          KES {v1.toLocaleString()}
+          {MOCK_CURRENCY} {v1.toLocaleString()}
         </Text>
       </Animated.View>
 
@@ -201,12 +210,16 @@ function BranchesMock({ c, styles, animate }) {
           </Text>
         </View>
         <Text style={[styles.branchValue, { color: c.textPrimary }]}>
-          KES {v2.toLocaleString()}
+          {MOCK_CURRENCY} {v2.toLocaleString()}
         </Text>
       </Animated.View>
 
       <Animated.View style={[styles.permissionRow, a3]}>
-        <Ionicons name="shield-checkmark-outline" size={14} color={c.primary} />
+        <Ionicons
+          name="shield-checkmark-outline"
+          size={14}
+          color={c.primary}
+        />
         <Text style={[styles.permissionText, { color: c.textMuted }]}>
           {' '}Branch access follows your permissions
         </Text>
@@ -297,13 +310,22 @@ export default function OnboardingScreen({ onDone }) {
   const reduceMotion = useReduceMotion();
 
   const [index, setIndex] = useState(0);
+  const [seenSlides, setSeenSlides] = useState({ 0: true });
+
   const scrollRef = useRef(null);
+  const headerFade = useRef(new Animated.Value(1)).current;
 
   const goTo = useCallback(
     (i) => {
       const clamped = Math.max(0, Math.min(SLIDES.length - 1, i));
-      scrollRef.current?.scrollTo({ x: clamped * width, animated: !reduceMotion });
+      scrollRef.current?.scrollTo({
+        x: clamped * width,
+        animated: !reduceMotion,
+      });
       setIndex(clamped);
+      setSeenSlides((prev) =>
+        prev[clamped] ? prev : { ...prev, [clamped]: true }
+      );
     },
     [width, reduceMotion]
   );
@@ -316,23 +338,61 @@ export default function OnboardingScreen({ onDone }) {
   const onMomentumEnd = (e) => {
     const x = e.nativeEvent.contentOffset.x;
     const i = Math.round(x / width);
-    if (i !== index) setIndex(i);
+    if (i !== index) {
+      setIndex(i);
+      setSeenSlides((prev) => (prev[i] ? prev : { ...prev, [i]: true }));
+    }
   };
+
+  useEffect(() => {
+    headerFade.setValue(0.35);
+    Animated.timing(headerFade, {
+      toValue: 1,
+      duration: 220,
+      easing: Easing.out(Easing.cubic),
+      useNativeDriver: true,
+    }).start();
+  }, [index, headerFade]);
 
   const isLast = index === SLIDES.length - 1;
 
   return (
-    <SafeAreaView style={[styles.safe, { backgroundColor: c.background }]} edges={['top']}>
-      {/* Ambient glows */}
+    <SafeAreaView
+      style={[styles.safe, { backgroundColor: c.background }]}
+      edges={['top']}
+    >
       <View pointerEvents="none" style={styles.orbA} />
       <View pointerEvents="none" style={styles.orbB} />
 
-      {/* Header */}
+      {/* Header — brand row + slide counter */}
       <View style={styles.header}>
-        <Text style={[styles.headerBrand, { color: c.textPrimary }]}>KxTill</Text>
-        <Text style={[styles.headerCount, { color: c.textMuted }]}>
-          {String(index + 1).padStart(2, '0')} / {String(SLIDES.length).padStart(2, '0')}
-        </Text>
+        <View style={styles.headerLeft}>
+          <View style={styles.logoChip}>
+            <Image
+              source={BRAND_ICONS.kxtill}
+              style={styles.brandLogo}
+              resizeMode="contain"
+            />
+          </View>
+          <View>
+            <Text style={[styles.headerBrand, { color: c.textPrimary }]}>
+              KxTill
+            </Text>
+            <Text style={[styles.headerBy, { color: c.textMuted }]}>
+              by KXBYTE
+            </Text>
+          </View>
+        </View>
+
+        <Animated.Text
+          style={[
+            styles.headerCount,
+            { color: c.textMuted, opacity: headerFade },
+          ]}
+        >
+          {String(index + 1).padStart(2, '0')} /{' '}
+          {String(SLIDES.length).padStart(2, '0')}
+        </Animated.Text>
       </View>
 
       <ScrollView
@@ -346,14 +406,34 @@ export default function OnboardingScreen({ onDone }) {
         {SLIDES.map((s, i) => (
           <View key={s.key} style={[styles.slide, { width }]}>
             <View style={styles.illustrationWrap}>
-              {i === 0 && <OverviewMock c={c} styles={styles} animate={!reduceMotion} />}
-              {i === 1 && <AlertsMock c={c} styles={styles} animate={!reduceMotion} />}
-              {i === 2 && <BranchesMock c={c} styles={styles} animate={!reduceMotion} />}
+              {i === 0 && (
+                <OverviewMock
+                  c={c}
+                  styles={styles}
+                  animate={!reduceMotion && !!seenSlides[0]}
+                />
+              )}
+              {i === 1 && (
+                <AlertsMock
+                  c={c}
+                  styles={styles}
+                  animate={!reduceMotion && !!seenSlides[1]}
+                />
+              )}
+              {i === 2 && (
+                <BranchesMock
+                  c={c}
+                  styles={styles}
+                  animate={!reduceMotion && !!seenSlides[2]}
+                />
+              )}
             </View>
 
             <View style={styles.copy}>
               <View style={styles.kickerRow}>
-                <View style={[styles.kickerDot, { backgroundColor: c.primary }]} />
+                <View
+                  style={[styles.kickerDot, { backgroundColor: c.primary }]}
+                />
                 <Text style={[styles.kicker, { color: c.primary }]}>
                   {s.kicker}
                 </Text>
@@ -369,21 +449,35 @@ export default function OnboardingScreen({ onDone }) {
         ))}
       </ScrollView>
 
-      {/* Footer */}
-      <View style={[styles.footer, { paddingBottom: Math.max(insets.bottom, 16) + 8 }]}>
+      <View
+        style={[
+          styles.footer,
+          { paddingBottom: Math.max(insets.bottom, 16) + 8 },
+        ]}
+      >
         <View style={styles.dots}>
-          {SLIDES.map((_, i) => (
-            <View
-              key={i}
-              style={[
-                styles.dot,
-                {
-                  backgroundColor: i === index ? c.primary : c.border,
-                  width: i === index ? 22 : 6,
-                },
-              ]}
-            />
-          ))}
+          {SLIDES.map((_, i) => {
+            const active = i === index;
+            return (
+              <TouchableOpacity
+                key={i}
+                onPress={() => goTo(i)}
+                hitSlop={10}
+                activeOpacity={0.7}
+                style={styles.dotTap}
+              >
+                <View
+                  style={[
+                    styles.dot,
+                    {
+                      backgroundColor: active ? c.primary : c.border,
+                      width: active ? 22 : 6,
+                    },
+                  ]}
+                />
+              </TouchableOpacity>
+            );
+          })}
         </View>
 
         <TouchableOpacity
@@ -402,7 +496,12 @@ export default function OnboardingScreen({ onDone }) {
         </TouchableOpacity>
 
         {!isLast ? (
-          <TouchableOpacity onPress={finish} hitSlop={10} style={styles.skipWrap}>
+          <TouchableOpacity
+            onPress={finish}
+            hitSlop={10}
+            activeOpacity={0.7}
+            style={styles.skipWrap}
+          >
             <Text style={[styles.skip, { color: c.textMuted }]}>Skip</Text>
           </TouchableOpacity>
         ) : (
@@ -427,7 +526,7 @@ const makeStyles = (c) =>
       height: 340,
       borderRadius: 170,
       backgroundColor: c.primary,
-      opacity: 0.10,
+      opacity: 0.1,
     },
     orbB: {
       position: 'absolute',
@@ -446,9 +545,31 @@ const makeStyles = (c) =>
       justifyContent: 'space-between',
       paddingHorizontal: 24,
       paddingTop: 8,
-      paddingBottom: 12,
+      paddingBottom: 14,
     },
-    headerBrand: { fontSize: 18, fontWeight: '800', letterSpacing: -0.3 },
+    headerLeft: { flexDirection: 'row', alignItems: 'center' },
+    logoChip: {
+      width: 40,
+      height: 40,
+      borderRadius: 12,
+      backgroundColor: c.surface,
+      borderWidth: 1,
+      borderColor: c.border,
+      alignItems: 'center',
+      justifyContent: 'center',
+      marginRight: 10,
+    },
+    brandLogo: { width: 24, height: 24 },
+    headerBrand: {
+      fontSize: 16,
+      fontWeight: '800',
+      letterSpacing: -0.2,
+    },
+    headerBy: {
+      fontSize: 11,
+      fontWeight: '600',
+      marginTop: 1,
+    },
     headerCount: {
       fontSize: 12,
       fontWeight: '700',
@@ -467,7 +588,6 @@ const makeStyles = (c) =>
       marginBottom: 24,
     },
 
-    // Shared mock card
     mockCard: {
       borderRadius: 20,
       borderWidth: 1,
@@ -497,7 +617,11 @@ const makeStyles = (c) =>
       paddingTop: 16,
     },
     mockStat: { flex: 1 },
-    mockStatLabel: { fontSize: 11, fontWeight: '600', letterSpacing: 0.5 },
+    mockStatLabel: {
+      fontSize: 11,
+      fontWeight: '600',
+      letterSpacing: 0.5,
+    },
     mockStatValue: {
       fontSize: 22,
       fontWeight: '800',
@@ -511,7 +635,6 @@ const makeStyles = (c) =>
       marginHorizontal: 16,
     },
 
-    // Alerts
     mockStack: { gap: 12 },
     alertCard: {
       flexDirection: 'row',
@@ -533,7 +656,6 @@ const makeStyles = (c) =>
     alertValue: { fontSize: 20, fontWeight: '900' },
     alertValueLabel: { fontSize: 10, fontWeight: '600' },
 
-    // Branches
     branchCard: {
       flexDirection: 'row',
       alignItems: 'center',
@@ -557,9 +679,12 @@ const makeStyles = (c) =>
     },
     permissionText: { fontSize: 12 },
 
-    // Copy
     copy: { paddingHorizontal: 4 },
-    kickerRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 12 },
+    kickerRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      marginBottom: 12,
+    },
     kickerDot: { width: 8, height: 8, borderRadius: 4, marginRight: 8 },
     kicker: { fontSize: 11, fontWeight: '800', letterSpacing: 1.4 },
     title: {
@@ -571,7 +696,6 @@ const makeStyles = (c) =>
     },
     body: { fontSize: 16, lineHeight: 24 },
 
-    // Footer
     footer: {
       paddingHorizontal: 24,
       paddingTop: 16,
@@ -582,6 +706,7 @@ const makeStyles = (c) =>
       gap: 6,
       marginBottom: 20,
     },
+    dotTap: { paddingVertical: 4 },
     dot: { height: 6, borderRadius: 3 },
     cta: {
       flexDirection: 'row',
@@ -591,8 +716,16 @@ const makeStyles = (c) =>
       minHeight: 54,
       borderRadius: 14,
     },
-    ctaText: { fontSize: 17, fontWeight: '800', letterSpacing: -0.2 },
-    skipWrap: { alignItems: 'center', marginTop: 12, height: 24 },
+    ctaText: {
+      fontSize: 17,
+      fontWeight: '800',
+      letterSpacing: -0.2,
+    },
+    skipWrap: {
+      alignItems: 'center',
+      marginTop: 12,
+      height: 24,
+    },
     skip: { fontSize: 13, fontWeight: '600' },
   });
 

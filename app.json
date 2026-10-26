@@ -1,29 +1,37 @@
 {
   "expo": {
-    "name": "kxtill-mobile",
+    "name": "KxTill",
     "slug": "kxtill-mobile",
     "version": "1.0.0",
     "orientation": "portrait",
-    "icon": "./assets/icon.png",
+    "scheme": "kxtill",
     "userInterfaceStyle": "automatic",
+    "icon": "./assets/icon.png",
+    "primaryColor": "#F04000",
     "ios": {
-      "supportsTablet": true
+      "supportsTablet": true,
+      "bundleIdentifier": "co.ke.kxbyte.kxtill"
     },
     "android": {
+      "package": "co.ke.kxbyte.kxtill",
+      "googleServicesFile": "./google-services.json",
       "adaptiveIcon": {
-        "backgroundColor": "#E6F4FE",
-        "foregroundImage": "./assets/android-icon-foreground.png",
-        "backgroundImage": "./assets/android-icon-background.png",
-        "monochromeImage": "./assets/android-icon-monochrome.png"
+        "backgroundColor": "#eeeeee",
+        "foregroundImage": "./assets/android-icon-foreground.png"
+      },
+      "permissions": [
+        "android.permission.CAMERA",
+        "android.permission.POST_NOTIFICATIONS"
+      ]
+    },
+    "splash": {
+      "image": "./assets/splash.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#0F0F10",
+      "dark": {
+        "image": "./assets/splash.png",
+        "backgroundColor": "#000000"
       }
-    },
-    "androidStatusBar": {
-      "backgroundColor": "#00000000",
-      "translucent": true
-    },
-    "androidNavigationBar": {
-      "backgroundColor": "#00000000",
-      "barStyle": "light-content"
     },
     "web": {
       "favicon": "./assets/favicon.png"
@@ -32,7 +40,28 @@
       "expo-secure-store",
       "expo-web-browser",
       "@react-native-vector-icons/ionicons",
-      "expo-sqlite"
-    ]
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "Allow KxTill to scan QR codes from your POS.",
+          "microphonePermission": false,
+          "recordAudioAndroid": false
+        }
+      ],
+      [
+        "expo-navigation-bar",
+        {
+          "style": "light",
+          "hidden": false
+        }
+      ],
+      "@react-native-firebase/app",
+      "@react-native-firebase/messaging"
+    ],
+    "extra": {
+      "eas": {
+        "projectId": "09dc63c2-f851-4598-a9e4-12c5c129928d"
+      }
+    }
   }
 }

@@ -30,6 +30,7 @@ import {
   useWindowDimensions,
   PanResponder,
 } from 'react-native';
+import { useCallback } from 'react';
 import { LinearGradient } from 'expo-linear-gradient';
 import * as WebBrowser from 'expo-web-browser';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -108,6 +109,172 @@ function hexToHsv(hex) {
   }
   const s = max === 0 ? 0 : d / max;
   return { h, s, v: max };
+}
+
+function DevicesSection({ c, styles }) {
+  const [state, setState] = useState({
+    loading: true,
+    error: null,
+    devices: [],
+    pending: [],
+  });
+  const [busyId, setBusyId] = useState(null);
+
+  const load = useCallback(async () => {
+    setState((s) => ({ ...s, loading: true, error: null }));
+    try {
+      const { api } = await import('../../services/api');
+      const { data } = await api.get('/api/v1/auth/pairing/devices');
+      setState({
+        loading: false,
+        error: null,
+        devices: Array.isArray(data.devices) ? data.devices : [],
+        pending: Array.isArray(data.pending) ? data.pending : [],
+      });
+    } catch (e) {
+      setState({
+        loading: false,
+        error:
+          e?.response?.data?.message ||
+          e?.message ||
+          'Could not load devices',
+        devices: [],
+        pending: [],
+      });
+    }
+  }, []);
+
+  useEffect(() => {
+    load();
+  }, [load]);
+
+  const revoke = useCallback(
+    async (id) => {
+      setBusyId(id);
+      try {
+        const { api } = await import('../../services/api');
+        await api.delete(`/api/v1/auth/pairing/${id}`);
+        await load();
+      } catch {
+        /* silent — the row stays until the next refresh */
+      } finally {
+        setBusyId(null);
+      }
+    },
+    [load]
+  );
+
+  const totalRows = state.devices.length + state.pending.length;
+
+  return (
+    <View style={styles.card}>
+      {state.loading ? (
+        <View style={styles.row}>
+          <View style={styles.iconChip}>
+            <Ionicons name="phone-portrait-outline" size={16} color={c.link} />
+          </View>
+          <View style={styles.rowText}>
+            <Text style={styles.rowLabel}>Devices</Text>
+            <Text style={styles.rowValue}>Loading…</Text>
+          </View>
+        </View>
+      ) : state.error ? (
+        <View style={styles.row}>
+          <View style={styles.iconChip}>
+            <Ionicons name="alert-circle-outline" size={16} color={c.danger} />
+          </View>
+          <View style={styles.rowText}>
+            <Text style={styles.rowLabel}>Devices</Text>
+            <Text style={styles.rowSub}>{state.error}</Text>
+          </View>
+          <Pressable onPress={load} hitSlop={8}>
+            <Text style={styles.rowActionText}>Retry</Text>
+          </Pressable>
+        </View>
+      ) : totalRows === 0 ? (
+        <View style={styles.row}>
+          <View style={styles.iconChip}>
+            <Ionicons name="phone-portrait-outline" size={16} color={c.link} />
+          </View>
+          <View style={styles.rowText}>
+            <Text style={styles.rowLabel}>Devices</Text>
+            <Text style={styles.rowValue}>No paired devices</Text>
+            <Text style={styles.rowSub}>Scan a QR from the POS to connect one.</Text>
+          </View>
+        </View>
+      ) : (
+        <>
+          {state.devices.map((d, i) => (
+            <View key={d.id}>
+              {i > 0 || state.pending.length > 0 ? <Divider styles={styles} /> : null}
+              <View style={styles.row}>
+                <View style={styles.iconChip}>
+                  <Ionicons
+                    name="phone-portrait-outline"
+                    size={16}
+                    color={c.primary}
+                  />
+                </View>
+                <View style={styles.rowText}>
+                  <Text style={styles.rowLabel}>Paired</Text>
+                  <Text style={styles.rowValue} numberOfLines={1}>
+                    {d.label}
+                  </Text>
+                  <Text style={styles.rowSub} numberOfLines={1}>
+                    {d.organization?.name || '—'}
+                    {d.branch?.name ? ` · ${d.branch.name}` : ''}
+                    {d.pairedAt
+                      ? ` · ${new Date(d.pairedAt).toLocaleDateString()}`
+                      : ''}
+                  </Text>
+                </View>
+                <Pressable
+                  onPress={() => revoke(d.id)}
+                  disabled={busyId === d.id}
+                  hitSlop={8}
+                  style={{ opacity: busyId === d.id ? 0.5 : 1 }}
+                >
+                  <Text style={[styles.rowActionText, { color: c.danger }]}>
+                    {busyId === d.id ? '…' : 'Unpair'}
+                  </Text>
+                </Pressable>
+              </View>
+            </View>
+          ))}
+
+          {state.pending.map((p, i) => (
+            <View key={p.id}>
+              <Divider styles={styles} />
+              <View style={styles.row}>
+                <View style={styles.iconChip}>
+                  <Ionicons name="qr-code-outline" size={16} color={c.warning} />
+                </View>
+                <View style={styles.rowText}>
+                  <Text style={styles.rowLabel}>Pending</Text>
+                  <Text style={styles.rowValue} numberOfLines={1}>
+                    {p.label}
+                  </Text>
+                  <Text style={styles.rowSub}>
+                    Expires {new Date(p.expiresAt).toLocaleTimeString()}
+                  </Text>
+                </View>
+                <Pressable
+                  onPress={() => revoke(p.id)}
+                  disabled={busyId === p.id}
+                  hitSlop={8}
+                  style={{ opacity: busyId === p.id ? 0.5 : 1 }}
+                >
+                  <Text style={[styles.rowActionText, { color: c.danger }]}>
+                    {busyId === p.id ? '…' : 'Cancel'}
+                  </Text>
+                </Pressable>
+              </View>
+            </View>
+          ))}
+        </>
+      )}
+    </View>
+  );
 }
 
 /* ── Screen ────────────────────────────────────────────────── */
@@ -403,16 +570,19 @@ export default function AccountScreen() {
               value={activeBranch?.name || '—'}
               sub={activeBranch?.address || null}
             />
-            <Divider styles={styles} />
-            <Row
-              c={c}
-              styles={styles}
-              icon="phone-portrait-outline"
-              label="This device"
-              value={Platform.OS === 'ios' ? 'iPhone / iPad' : 'Android'}
-              onPress={() => navigation.navigate(ROUTES.PAIR_DEVICE)}
-              actionLabel="Connect"
-            />
+                  <Divider styles={styles} />
+{/* <Row
+  c={c}
+  styles={styles}
+  icon="phone-portrait-outline"
+  label="This device"
+  value={Platform.OS === 'ios' ? 'iPhone / iPad' : 'Android'}
+/>
+<Divider styles={styles} />
+<View style={styles.sectionLabelInline}>
+  <Text style={styles.sectionLabelInlineText}>PAIRED DEVICES</Text>
+</View>
+<DevicesSection c={c} styles={styles} /> */}
           </View>
 
           {/* Access */}
@@ -801,7 +971,17 @@ const makeStyles = (c) =>
       height: 800,
       backgroundColor: c.hero,
     },
-
+sectionLabelInline: {
+  paddingTop: 12,
+  paddingBottom: 4,
+  paddingHorizontal: 4,
+},
+sectionLabelInlineText: {
+  color: c.textMuted,
+  fontSize: 10,
+  fontWeight: '800',
+  letterSpacing: 1.2,
+},
     hero: {
       backgroundColor: c.hero,
       paddingHorizontal: 22,
