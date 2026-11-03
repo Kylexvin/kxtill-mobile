@@ -1,65 +1,59 @@
 // src/services/fcm.service.js
 //
-// FCM registration for the mobile app.
-//
-//   - Requests notification permission via the OS (Android 13+ / iOS).
-//   - Gets the FCM registration token from the device.
-//   - POSTs it to /kxtill/mobile/devices/register so the backend can
-//     target this device by (userId, productKey).
-//   - Listens for token refresh and re-registers when it changes.
-//
-// Call init() only after sign-in. Before sign-in, there is no user to
-// attach the token to, and /devices/register requires auth.
+// FCM registration using the modular API (v22+).
+// v26 removed the namespaced messaging() call entirely.
 
 import { Platform } from 'react-native';
-import messaging from '@react-native-firebase/messaging';
+import {
+  getMessaging,
+  getToken,
+  onTokenRefresh,
+  deleteToken,
+  requestPermission,
+  AuthorizationStatus,
+  registerDeviceForRemoteMessages,
+  isDeviceRegisteredForRemoteMessages,
+} from '@react-native-firebase/messaging';
 import { api } from './api';
 
-let initialized = false;
+// Create the messaging instance once.
+const messaging = getMessaging();
+
+let registeredOrgId = null;
 let unsubscribeOnTokenRefresh = null;
 
 function deviceLabel() {
-  // Reasonable, low-effort label. FCM does not give us a device model name
-  // through the messaging API; the OS name is good enough for the devices
-  // list in Account.
   return Platform.OS === 'ios' ? 'iPhone / iPad' : 'Android';
 }
 
 async function ensurePermission() {
-  const authStatus = await messaging().requestPermission();
-  const enabled =
-    authStatus === messaging.AuthorizationStatus.AUTHORIZED ||
-    authStatus === messaging.AuthorizationStatus.PROVISIONAL;
-
-  if (!enabled) {
-    return false;
-  }
-
-  // iOS: without this, a notification arriving while the app is in the
-  // foreground is silently dropped.
-  if (Platform.OS === 'ios') {
-    await messaging().registerDeviceForRemoteMessages();
-  }
-
-  return true;
-}
-
-async function registerToken(token) {
   try {
-    await api.post('/api/v1/organizations/placeholder/kxtill/mobile/devices/register', {
-      token,
-      platform: Platform.OS,
-      deviceLabel: deviceLabel(),
-    });
+    if (Platform.OS === 'ios') {
+      const authStatus = await requestPermission(messaging);
+      const enabled =
+        authStatus === AuthorizationStatus.AUTHORIZED ||
+        authStatus === AuthorizationStatus.PROVISIONAL;
+      console.log('[fcm] ios permission status:', authStatus, 'granted:', enabled);
+      if (!enabled) return false;
+
+      if (!isDeviceRegisteredForRemoteMessages(messaging)) {
+        await registerDeviceForRemoteMessages(messaging);
+      }
+    } else {
+      console.log('[fcm] android: skipping requestPermission');
+    }
+    return true;
   } catch (e) {
-    // The endpoint needs the org id in the URL, which the caller provides.
-    // This function is a placeholder — see registerWithOrg below.
-    throw e;
+    console.log('[fcm] permission error:', e?.message);
+    return false;
   }
 }
 
 export async function registerWithOrg(organizationId, token) {
-  if (!organizationId || !token) return null;
+  if (!organizationId || !token) {
+    console.log('[fcm] register skipped: missing orgId or token');
+    return null;
+  }
   try {
     const { data } = await api.post(
       `/api/v1/organizations/${organizationId}/kxtill/mobile/devices/register`,
@@ -69,17 +63,23 @@ export async function registerWithOrg(organizationId, token) {
         deviceLabel: deviceLabel(),
       }
     );
+    console.log('[fcm] registered with backend:', data?.data?.id || 'ok');
     return data?.data || null;
   } catch (e) {
+    console.log(
+      '[fcm] register failed:',
+      e?.response?.status,
+      e?.response?.data || e?.message
+    );
     return null;
   }
 }
 
 export async function unregister() {
   try {
-    const token = await messaging().getToken();
+    const token = await getToken(messaging);
     if (token) {
-      await messaging().deleteToken();
+      await deleteToken(messaging);
     }
   } catch {
     /* ignore */
@@ -88,42 +88,49 @@ export async function unregister() {
     unsubscribeOnTokenRefresh();
     unsubscribeOnTokenRefresh = null;
   }
-  initialized = false;
+  registeredOrgId = null;
 }
 
-/**
- * Initialise FCM registration. Must be called after sign-in, with the
- * active organization id so the token is registered against the right org.
- *
- * Returns the current token (or null if permission was denied).
- */
 export async function init(organizationId) {
-  if (!organizationId) return null;
-  if (initialized) return null;
-  initialized = true;
+  if (!organizationId) {
+    console.log('[fcm] init skipped: no orgId');
+    return null;
+  }
+  if (registeredOrgId === organizationId) {
+    console.log('[fcm] init skipped: already registered for this org');
+    return null;
+  }
+  registeredOrgId = organizationId;
+
+  console.log('[fcm] init for org:', organizationId);
 
   const granted = await ensurePermission();
   if (!granted) {
+    console.log('[fcm] init aborted: permission not granted');
     return null;
   }
 
   let token = null;
   try {
-    token = await messaging().getToken();
-  } catch {
+    token = await getToken(messaging);
+    console.log('[fcm] token:', token);
+  } catch (e) {
+    console.log('[fcm] getToken failed:', e?.message);
     return null;
   }
 
-  if (!token) return null;
+  if (!token) {
+    console.log('[fcm] init aborted: no token');
+    return null;
+  }
 
   await registerWithOrg(organizationId, token);
 
-  // Token refresh: FCM issues new tokens periodically. Re-register so the
-  // backend stops targeting the stale one.
   if (unsubscribeOnTokenRefresh) {
     unsubscribeOnTokenRefresh();
   }
-  unsubscribeOnTokenRefresh = messaging().onTokenRefresh(async (newToken) => {
+  unsubscribeOnTokenRefresh = onTokenRefresh(messaging, async (newToken) => {
+    console.log('[fcm] token refreshed:', newToken.slice(0, 24) + '…');
     await registerWithOrg(organizationId, newToken);
   });
 

@@ -9,6 +9,7 @@ import AccountScreen from '../screens/account/AccountScreen';
 import NotificationsScreen from '../screens/notifications/NotificationsScreen';
 import CustomTabBar from './CustomTabBar';
 import { ActionsArcProvider, ActionsArcOverlay } from './ActionsArc';
+import { navigationRef } from './navigationRef';
 
 const Tab = createBottomTabNavigator();
 
@@ -18,10 +19,48 @@ function NullScreen() {
   return null;
 }
 
-// item.id is one of: stock-count, stock-lookup, scan, sales-today,
-// force-close. Wire each to real navigation as the features ship.
+// item.id is one of: share-receipt, add-product, barcode-tool,
+// stock-count, team. Wire each to a real screen as the features ship.
+//
+// Uses navigationRef instead of useNavigation() because the arc lives
+// outside the tab navigator's screen context. navigationRef dispatches
+// to the root and React Navigation resolves the screen by name across
+// the whole navigator tree.
 const handleArcAction = (item) => {
-  // TODO
+  if (!item) return;
+
+  switch (item.id) {
+    case 'share-receipt':
+      // TODO: navigate to SalesListScreen when built
+      break;
+
+    case 'add-product':
+      // TODO: navigate to AddProductScreen when built
+      break;
+
+    case 'barcode-tool':
+      // TODO: navigate to BarcodeToolScreen when built
+      break;
+
+    case 'stock-count':
+      // TODO: navigate to StockCountScreen when built
+      break;
+
+    case 'team':
+      navigationRef.navigate(ROUTES.TAB_BUSINESS, {
+        screen: ROUTES.BRANCH_TEAM,
+      });
+      break;
+
+      case 'share-receipt':
+       navigationRef.navigate(ROUTES.TAB_BUSINESS, {
+         screen: ROUTES.BRANCH_SALES_LIST,
+     });
+     break;
+
+    default:
+      break;
+  }
 };
 
 export default function MainTabNavigator() {
@@ -33,11 +72,11 @@ export default function MainTabNavigator() {
           tabBar={(props) => <CustomTabBar {...props} />}
         >
           <Tab.Screen name={ROUTES.TAB_HOME} component={DashboardScreen} />
-          <Tab.Screen
-            name={ROUTES.TAB_BUSINESS}
-            component={BranchesStack}
-            options={{ popToTopOnBlur: true }}
-          />
+<Tab.Screen
+  name={ROUTES.TAB_BUSINESS}
+  component={BranchesStack}
+  options={{ popToTopOnBlur: true }}
+/>
           <Tab.Screen name={ROUTES.TAB_ACTIONS} component={NullScreen} />
           <Tab.Screen
             name={ROUTES.TAB_NOTIFICATIONS}

@@ -1,10 +1,4 @@
 // src/screens/dashboard/components/SalesHeroCard.jsx
-//
-// Hero stats card. Overlaps the header band (default 68px).
-//
-// Currency comes from the `currency` prop. On zero-sales days the card
-// fetches the 7-day sales chart and shows a populated zero-state with
-// real data instead of a bare "KES 0".
 
 import { memo, useEffect, useMemo, useRef, useState } from 'react';
 import {
@@ -80,7 +74,9 @@ function SalesHeroCardBase({
   const { theme: c } = useTheme();
   const { activeOrganization } = useOrganizationContext();
   const { width } = useWindowDimensions();
-  const valueSize = clamp(Math.round(width * 0.1), 34, 46);
+
+  const valueSize = clamp(Math.round(width * 0.13), 38, 58);
+
   const styles = useMemo(
     () => makeStyles(c, valueSize, overlap),
     [c, valueSize, overlap]
@@ -92,7 +88,6 @@ function SalesHeroCardBase({
   const tone = up ? c.success : c.danger;
   const isZero = Number(gross) === 0;
 
-  // 7-day chart — only fetched on zero days, only once.
   const [weekChart, setWeekChart] = useState(null);
   useEffect(() => {
     if (!isZero) return undefined;
@@ -132,6 +127,42 @@ function SalesHeroCardBase({
   const weekTrend =
     weekChart?.trend != null ? Number(weekChart.trend) : null;
 
+  // Right-side pace block — always rendered on a normal day.
+  // Prefers delta; falls back to a money stat; final fallback is a placeholder
+  // so the right column is never empty.
+  const pace = useMemo(() => {
+    if (isZero) return null;
+
+    if (hasDelta) {
+      return {
+        value: `${up ? '+' : '−'}${Math.abs(Number(delta))}%`,
+        label: 'vs usual pace',
+        color: tone,
+        icon: up ? 'trending-up' : 'trending-down',
+      };
+    }
+
+    const money = strip.find((s) => s?.isCurrency === true);
+    if (money) {
+      const display =
+        typeof money.value === 'number' ? fmt(money.value) : money.value ?? '';
+      return {
+        value: prefix ? `${prefix} ${display}` : display,
+        label: money.label || 'sales',
+        color: c.textPrimary,
+        icon: 'stats-chart',
+      };
+    }
+
+    // Final fallback so the right side is filled even with no data.
+    return {
+      value: '—',
+      label: 'no history yet',
+      color: c.textMuted,
+      icon: 'time-outline',
+    };
+  }, [isZero, hasDelta, up, delta, tone, strip, prefix, c.textPrimary, c.textMuted]);
+
   return (
     <View style={styles.card}>
       <View pointerEvents="none" style={styles.glow} />
@@ -141,23 +172,9 @@ function SalesHeroCardBase({
           <LiveDot color={c.primary} />
           <Text style={styles.label}>TODAY'S SALES</Text>
         </View>
-        {!isZero && hasDelta ? (
-          <View style={[styles.delta, { backgroundColor: c.surfaceElevated }]}>
-            <Ionicons
-              name={up ? 'trending-up' : 'trending-down'}
-              size={13}
-              color={tone}
-            />
-            <Text style={[styles.deltaText, { color: tone }]}>
-              {up ? '+' : '−'}
-              {Math.abs(Number(delta))}%
-            </Text>
-          </View>
-        ) : null}
       </View>
 
       {isZero ? (
-        /* ── Zero-state ───────────────────────────────── */
         <>
           <View style={styles.zeroTitleRow}>
             <Text style={styles.zeroTitle}>Quiet day so far</Text>
@@ -246,35 +263,60 @@ function SalesHeroCardBase({
           </View>
         </>
       ) : (
-        /* ── Normal day ───────────────────────────────── */
         <>
+          {/* ── Number row: value left, pace block right ── */}
           <View style={styles.valueRow}>
-            {prefix ? <Text style={styles.currency}>{prefix}</Text> : null}
-            <Text style={styles.value} numberOfLines={1} adjustsFontSizeToFit>
-              {fmt(gross)}
-            </Text>
-          </View>
-          <Text style={styles.sub}>
-            {hasDelta
-              ? 'vs usual pace for this time'
-              : 'Not enough history yet'}
-          </Text>
-
-          {bars ? (
-            <View style={styles.bars}>
-              {bars.map((v, i) => (
-                <View
-                  key={i}
-                  style={[
-                    styles.bar,
-                    { height: Math.max(3, Math.round(v * 30)) },
-                    i === bars.length - 1 && styles.barLast,
-                  ]}
-                />
-              ))}
+            <View style={styles.valueLeft}>
+              {prefix ? <Text style={styles.currency}>{prefix}</Text> : null}
+              <Text
+                style={styles.value}
+                numberOfLines={1}
+                adjustsFontSizeToFit
+              >
+                {fmt(gross)}
+              </Text>
             </View>
+
+            <View style={styles.paceBlock}>
+              <View style={styles.paceHeader}>
+                <Ionicons
+                  name={pace.icon}
+                  size={12}
+                  color={pace.color}
+                />
+                <Text style={[styles.paceValue, { color: pace.color }]}>
+                  {pace.value}
+                </Text>
+              </View>
+              <Text style={styles.paceLabel} numberOfLines={1}>
+                {pace.label}
+              </Text>
+            </View>
+          </View>
+
+          {/* ── Full-width sparkline ── */}
+          {bars ? (
+            <>
+              <View style={styles.bars}>
+                {bars.map((v, i) => (
+                  <View
+                    key={i}
+                    style={[
+                      styles.bar,
+                      { height: Math.max(3, Math.round(v * 52)) },
+                      i === bars.length - 1 && styles.barLast,
+                    ]}
+                  />
+                ))}
+              </View>
+              <View style={styles.barsFooter}>
+                <Text style={styles.barsFooterText}>open</Text>
+                <Text style={styles.barsFooterText}>now</Text>
+              </View>
+            </>
           ) : null}
 
+          {/* ── Centered 3-stat strip ── */}
           {strip.length > 0 ? (
             <View style={styles.strip}>
               {strip.map((s, i) => {
@@ -285,7 +327,7 @@ function SalesHeroCardBase({
                     : s.value ?? '';
                 return (
                   <View
-                    key={s.label}
+                    key={s.label ?? i}
                     style={[styles.stat, i > 0 && styles.statDivider]}
                   >
                     <Text
@@ -350,23 +392,26 @@ const makeStyles = (c, valueSize, overlap) =>
       fontWeight: '800',
       letterSpacing: 1.3,
     },
-    delta: {
-      flexDirection: 'row',
-      alignItems: 'center',
-      gap: 4,
-      paddingVertical: 4,
-      paddingHorizontal: 9,
-      borderRadius: 999,
-    },
-    deltaText: { fontSize: 12, fontWeight: '800' },
 
+    // ── Number row ──
     valueRow: {
+      flexDirection: 'row',
+      alignItems: 'flex-end',
+      justifyContent: 'space-between',
+      gap: 12,
+      marginTop: 12,
+    },
+    valueLeft: {
       flexDirection: 'row',
       alignItems: 'baseline',
       gap: 8,
-      marginTop: 12,
+      flexShrink: 1,
     },
-    currency: { color: c.link, fontSize: 16, fontWeight: '800' },
+    currency: {
+      color: c.link,
+      fontSize: 16,
+      fontWeight: '800',
+    },
     value: {
       flexShrink: 1,
       color: c.textPrimary,
@@ -376,9 +421,35 @@ const makeStyles = (c, valueSize, overlap) =>
       letterSpacing: -1.4,
       fontVariant: ['tabular-nums'],
     },
-    sub: { color: c.textMuted, fontSize: 12, fontWeight: '600', marginTop: 2 },
 
-    // Zero state
+    paceBlock: {
+      alignItems: 'flex-end',
+      paddingLeft: 12,
+      paddingBottom: 6,
+      borderLeftWidth: 1,
+      borderLeftColor: c.border,
+      minWidth: 100,
+    },
+    paceHeader: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 4,
+    },
+    paceValue: {
+      fontSize: 18,
+      fontWeight: '900',
+      letterSpacing: -0.4,
+      fontVariant: ['tabular-nums'],
+    },
+    paceLabel: {
+      color: c.textMuted,
+      fontSize: 10,
+      fontWeight: '700',
+      marginTop: 2,
+      letterSpacing: 0.2,
+    },
+
+    // ── Zero state ──
     zeroTitleRow: { marginTop: 12 },
     zeroTitle: {
       color: c.textPrimary,
@@ -416,22 +487,41 @@ const makeStyles = (c, valueSize, overlap) =>
       marginTop: 4,
     },
 
-    // Normal day bars
+    // ── Normal-day sparkline: full width ──
     bars: {
       flexDirection: 'row',
       alignItems: 'flex-end',
       gap: 3,
-      height: 30,
+      height: 52,
       marginTop: 16,
+      paddingBottom: 6,
+      borderBottomWidth: 1,
+      borderBottomColor: c.border,
     },
     bar: {
-      flex: 1,
+      flexGrow: 1,
+      flexBasis: 0,
+      minWidth: 2,
+      maxWidth: 12,
       borderRadius: 2,
       backgroundColor: c.primary,
       opacity: 0.25,
     },
     barLast: { opacity: 1 },
 
+    barsFooter: {
+      flexDirection: 'row',
+      justifyContent: 'space-between',
+      marginTop: 6,
+    },
+    barsFooterText: {
+      color: c.textMuted,
+      fontSize: 10,
+      fontWeight: '600',
+      letterSpacing: 0.3,
+    },
+
+    // ── Stats strip: centered per column ──
     strip: {
       flexDirection: 'row',
       marginTop: 16,
@@ -439,9 +529,12 @@ const makeStyles = (c, valueSize, overlap) =>
       borderTopWidth: 1,
       borderTopColor: c.border,
     },
-    stat: { flex: 1, paddingRight: 8 },
+    stat: {
+      flex: 1,
+      alignItems: 'center',
+      paddingHorizontal: 4,
+    },
     statDivider: {
-      paddingLeft: 14,
       borderLeftWidth: 1,
       borderLeftColor: c.border,
     },

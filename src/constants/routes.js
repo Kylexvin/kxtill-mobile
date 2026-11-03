@@ -22,10 +22,13 @@ export const ROUTES = {
   BRANCH_SETTINGS: 'BranchSettings',
   BRANCH_DEVICES: 'BranchDevices',
   BRANCH_ACTIVITY: 'BranchActivity',
+  BRANCH_RECEIPT: 'BranchReceipt',
+  BRANCH_SALES_LIST: 'BranchSalesList',
 
   // Account stack
   KXTILL_SETTINGS: 'KxtillSettings',
 
+  
   // Reserved — referenced in code comments, not currently mounted
   // DASHBOARD / BRANCHES / BRANCH_DETAILS / REPORTS / REPORT_DETAILS /
   // STOCK_OVERVIEW / PRODUCT_DETAILS / SHIFTS / SHIFT_DETAILS /

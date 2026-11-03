@@ -1,27 +1,20 @@
 // src/context/OrganizationContext.jsx
 //
 // Owns: organizations, activeOrganization, branches, activeBranch,
-// and viewBranchId (the display scope used by dashboard + branches tabs).
+// viewBranchId (display scope), and productInstances (verticals).
 //
 // Auto-select rules:
 //   - Pairing hint (from POS) takes priority on first hydrate after pairing.
 //   - Persisted org from SecureStore is next.
 //   - Single-org fallback last.
-//   - Explicit clear (setActiveOrganization(null)) disables re-fire.
 //   - Branch auto-select runs once per org hydrate.
 //
 // Persistence: { organizationId, branchId, viewBranchId } as one blob.
 //
-// Hydration gate:
-//   - `ready` is MONOTONIC. It starts false, flips true exactly once,
-//     and never goes back to false — that's what prevents the RootNavigator
-//     from oscillating back to SplashScreen mid-hydration and flashing the
-//     picker screens.
-//   - `ready` does not flip true until:
-//       * the org list has loaded at least once,
-//       * org auto-select has fired (if an org list exists),
-//       * the branch effect has STARTED for the selected org, and
-//       * branch auto-select has finished (if branches exist).
+// Hydration gate (monotonic):
+//   - `ready` starts false, flips true exactly once, never back to false.
+//   - `ready` waits for: org list loaded once, org auto-select fired,
+//     branch effect started for the selected org, branch auto-select done.
 
 import {
   createContext,
@@ -35,6 +28,7 @@ import {
 import * as SecureStore from 'expo-secure-store';
 import { useAuthContext } from './AuthContext';
 import orgsService from '../services/organizations.service';
+import { api } from '../services/api';
 
 const STORAGE_KEY = 'kxtill.org.context.v1';
 const OrganizationContext = createContext(null);
@@ -68,19 +62,17 @@ export function OrganizationProvider({ children }) {
   const [branches, setBranches] = useState([]);
   const [activeBranch, setActiveBranchState] = useState(null);
   const [viewBranchId, setViewBranchIdState] = useState(null);
+  const [productInstances, setProductInstances] = useState([]);
   const [loadingOrgs, setLoadingOrgs] = useState(false);
   const [loadingBranches, setLoadingBranches] = useState(false);
+  const [loadingInstances, setLoadingInstances] = useState(false);
   const [error, setError] = useState(null);
   const [ready, setReady] = useState(false);
 
   const orgAutoSelectDone = useRef(false);
   const branchAutoSelectDone = useRef(false);
   const loadedOrgsOnce = useRef(false);
-  // Tracks which org the branch effect has already started for. Used by
-  // the ready gate to avoid flipping true between org selection and
-  // branch loading.
   const branchFetchStartedForOrg = useRef(null);
-  // One-shot branch hint from the POS pairing flow.
   const pendingBranchIdRef = useRef(null);
 
   // ── Load organizations ─────────────────────────────────────
@@ -91,9 +83,11 @@ export function OrganizationProvider({ children }) {
       setBranches([]);
       setActiveBranchState(null);
       setViewBranchIdState(null);
+      setProductInstances([]);
       setError(null);
       setLoadingOrgs(false);
       setLoadingBranches(false);
+      setLoadingInstances(false);
       orgAutoSelectDone.current = false;
       branchAutoSelectDone.current = false;
       loadedOrgsOnce.current = false;
@@ -143,7 +137,6 @@ export function OrganizationProvider({ children }) {
     orgAutoSelectDone.current = true;
 
     (async () => {
-      // 1) POS pairing hint
       const pairingCtx = consumePairingContext?.();
       if (pairingCtx?.organizationId) {
         const found = organizations.find(
@@ -160,7 +153,6 @@ export function OrganizationProvider({ children }) {
         }
       }
 
-      // 2) Persisted org
       const stored = await readStored();
       if (stored?.organizationId) {
         const found = organizations.find(
@@ -172,7 +164,6 @@ export function OrganizationProvider({ children }) {
         }
       }
 
-      // 3) Single-org fallback
       if (organizations.length === 1) {
         setActiveOrganizationState(organizations[0]);
       }
@@ -199,8 +190,6 @@ export function OrganizationProvider({ children }) {
       return;
     }
 
-    // Mark this org as having its branch fetch started — the ready gate
-    // waits on this before flipping true.
     branchFetchStartedForOrg.current = activeOrgId;
 
     let cancelled = false;
@@ -222,7 +211,6 @@ export function OrganizationProvider({ children }) {
         if (stored?.organizationId === activeOrgId && stored?.branchId) {
           restored = list.find((b) => b.id === stored.branchId) || null;
         }
-        // Pairing hint (one-shot).
         if (!restored && pendingBranchIdRef.current) {
           restored =
             list.find((b) => b.id === pendingBranchIdRef.current) || null;
@@ -267,9 +255,42 @@ export function OrganizationProvider({ children }) {
     };
   }, [status, activeOrgId]);
 
+  // ── Product instances (verticals) whenever ORG changes ─────
+  useEffect(() => {
+    if (status !== 'signedIn') return;
+    if (!activeOrgId) {
+      setProductInstances([]);
+      setLoadingInstances(false);
+      return;
+    }
+
+    let cancelled = false;
+    setLoadingInstances(true);
+    (async () => {
+      try {
+        const { data } = await api.get(
+          `/api/v1/products/organizations/${activeOrgId}/products`
+        );
+        const kxtill = (data.products || []).find(
+          (p) => p.productKey === 'kxtill'
+        );
+        const instances = (kxtill?.instances || []).filter(
+          (i) => i.isActive
+        );
+        if (!cancelled) setProductInstances(instances);
+      } catch {
+        if (!cancelled) setProductInstances([]);
+      } finally {
+        if (!cancelled) setLoadingInstances(false);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [status, activeOrgId]);
+
   // ── Hydration gate (monotonic) ─────────────────────────────
-  // Once `ready` flips true, it never goes back to false. That is what
-  // keeps RootNavigator from oscillating back to SplashScreen mid-hydration.
   useEffect(() => {
     if (ready) return;
 
@@ -285,9 +306,6 @@ export function OrganizationProvider({ children }) {
     }
 
     if (activeOrganization) {
-      // Wait for the branch effect to have started for this org. Otherwise
-      // RootNavigator could decide "no activeBranch → show SelectBranchScreen"
-      // before we've even fetched the branch list.
       if (branchFetchStartedForOrg.current !== activeOrganization.id) return;
       if (branches.length > 0 && !activeBranch) {
         if (!branchAutoSelectDone.current) return;
@@ -315,6 +333,7 @@ export function OrganizationProvider({ children }) {
         setActiveBranchState(null);
         setViewBranchIdState(null);
         setBranches([]);
+        setProductInstances([]);
         await SecureStore.deleteItemAsync(STORAGE_KEY).catch(() => {});
         return;
       }
@@ -330,6 +349,7 @@ export function OrganizationProvider({ children }) {
       setActiveBranchState(null);
       setViewBranchIdState(null);
       setBranches([]);
+      setProductInstances([]);
 
       const stored = await readStored();
       await writeStored({
@@ -373,6 +393,19 @@ export function OrganizationProvider({ children }) {
       if (activeOrgId) {
         const blist = await orgsService.listBranches(activeOrgId);
         setBranches(blist);
+        try {
+          const { data } = await api.get(
+            `/api/v1/products/organizations/${activeOrgId}/products`
+          );
+          const kxtill = (data.products || []).find(
+            (p) => p.productKey === 'kxtill'
+          );
+          setProductInstances(
+            (kxtill?.instances || []).filter((i) => i.isActive)
+          );
+        } catch {
+          /* leave existing */
+        }
       }
     } catch (e) {
       setError(
@@ -393,8 +426,10 @@ export function OrganizationProvider({ children }) {
       setActiveBranch,
       viewBranchId,
       setViewBranchId,
+      productInstances,
       loadingOrgs,
       loadingBranches,
+      loadingInstances,
       ready,
       error,
       refresh,
@@ -409,8 +444,10 @@ export function OrganizationProvider({ children }) {
       setActiveBranch,
       viewBranchId,
       setViewBranchId,
+      productInstances,
       loadingOrgs,
       loadingBranches,
+      loadingInstances,
       ready,
       error,
       refresh,

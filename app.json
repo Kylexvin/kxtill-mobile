@@ -6,7 +6,7 @@
     "orientation": "portrait",
     "scheme": "kxtill",
     "userInterfaceStyle": "automatic",
-    "icon": "./assets/icon.png",
+    "icon": "./assets/images/icon.png",
     "primaryColor": "#F04000",
     "ios": {
       "supportsTablet": true,
@@ -17,24 +17,15 @@
       "googleServicesFile": "./google-services.json",
       "adaptiveIcon": {
         "backgroundColor": "#eeeeee",
-        "foregroundImage": "./assets/android-icon-foreground.png"
+        "foregroundImage": "./assets/images/adaptive-icon.png"
       },
       "permissions": [
         "android.permission.CAMERA",
         "android.permission.POST_NOTIFICATIONS"
       ]
     },
-    "splash": {
-      "image": "./assets/splash.png",
-      "resizeMode": "contain",
-      "backgroundColor": "#0F0F10",
-      "dark": {
-        "image": "./assets/splash.png",
-        "backgroundColor": "#000000"
-      }
-    },
     "web": {
-      "favicon": "./assets/favicon.png"
+      "favicon": "./assets/images/favicon.png"
     },
     "plugins": [
       "expo-secure-store",
@@ -55,8 +46,21 @@
           "hidden": false
         }
       ],
+      [
+        "expo-splash-screen",
+        {
+          "backgroundColor": "#fcfafa",
+          "image": "./assets/images/splash-icon.png",
+          "dark": {
+            "image": "./assets/images/splash-icon-dark.png",
+            "backgroundColor": "#000000"
+          },
+          "imageWidth": 200
+        }
+      ],
       "@react-native-firebase/app",
-      "@react-native-firebase/messaging"
+      "@react-native-firebase/messaging",
+      "expo-sharing"
     ],
     "extra": {
       "eas": {

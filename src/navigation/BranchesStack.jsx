@@ -8,23 +8,46 @@ import BranchSalesScreen from '../screens/branches/BranchSalesScreen';
 import BranchStockScreen from '../screens/branches/BranchStockScreen';
 import BranchShiftsScreen from '../screens/branches/BranchShiftsScreen';
 import BranchSettingsScreen from '../screens/branches/BranchSettingsScreen';
-
-// ...
+import TeamScreen from '../screens/branches/TeamScreen';
+import SalesListScreen from '../screens/branches/SalesListScreen';
+import ReceiptScreen from '../screens/branches/ReceiptScreen';
 
 const Stack = createNativeStackNavigator();
 
 export default function BranchesStack() {
   return (
     <Stack.Navigator screenOptions={{ headerShown: false }}>
-      <Stack.Screen name={ROUTES.BRANCHES_LIST} component={BranchesScreen} />
-      <Stack.Screen name={ROUTES.BRANCH_HOME} component={BranchHomeScreen} />
-      <Stack.Screen name={ROUTES.BRANCH_SALES} component={BranchSalesScreen} />
-      <Stack.Screen name={ROUTES.BRANCH_STOCK} component={BranchStockScreen} />
-      <Stack.Screen name={ROUTES.BRANCH_SHIFTS} component={BranchShiftsScreen} />
       <Stack.Screen
-  name={ROUTES.BRANCH_SETTINGS}
-  component={BranchSettingsScreen}
-/>
+        name={ROUTES.BRANCHES_LIST}
+        component={BranchesScreen}
+      />
+      <Stack.Screen
+        name={ROUTES.BRANCH_HOME}
+        component={BranchHomeScreen}
+      />
+      <Stack.Screen
+        name={ROUTES.BRANCH_SALES}
+        component={BranchSalesScreen}
+      />
+      <Stack.Screen
+        name={ROUTES.BRANCH_STOCK}
+        component={BranchStockScreen}
+      />
+      <Stack.Screen
+        name={ROUTES.BRANCH_SHIFTS}
+        component={BranchShiftsScreen}
+      />
+      <Stack.Screen
+        name={ROUTES.BRANCH_TEAM}
+        component={TeamScreen}
+      />
+      <Stack.Screen
+        name={ROUTES.BRANCH_SETTINGS}
+        component={BranchSettingsScreen}
+      />
+      <Stack.Screen name={ROUTES.BRANCH_SALES_LIST} component={SalesListScreen} />
+      <Stack.Screen name={ROUTES.BRANCH_RECEIPT} component={ReceiptScreen} />
+
     </Stack.Navigator>
   );
 }
