@@ -28,7 +28,10 @@ export const ROUTES = {
   // Account stack
   KXTILL_SETTINGS: 'KxtillSettings',
 
-  
+  INVENTORY: 'Inventory',
+  PRODUCT_DETAIL: 'ProductDetail',
+  PRODUCT_FORM: 'ProductForm',
+
   // Reserved — referenced in code comments, not currently mounted
   // DASHBOARD / BRANCHES / BRANCH_DETAILS / REPORTS / REPORT_DETAILS /
   // STOCK_OVERVIEW / PRODUCT_DETAILS / SHIFTS / SHIFT_DETAILS /

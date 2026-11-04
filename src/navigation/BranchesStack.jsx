@@ -11,6 +11,11 @@ import BranchSettingsScreen from '../screens/branches/BranchSettingsScreen';
 import TeamScreen from '../screens/branches/TeamScreen';
 import SalesListScreen from '../screens/branches/SalesListScreen';
 import ReceiptScreen from '../screens/branches/ReceiptScreen';
+import InventoryScreen from '../screens/inventory/InventoryScreen';
+import ProductFormScreen from '../screens/inventory/ProductFormScreen';
+import ProductDetailScreen from '../screens/inventory/ProductDetailScreen';
+
+
 
 const Stack = createNativeStackNavigator();
 
@@ -47,7 +52,19 @@ export default function BranchesStack() {
       />
       <Stack.Screen name={ROUTES.BRANCH_SALES_LIST} component={SalesListScreen} />
       <Stack.Screen name={ROUTES.BRANCH_RECEIPT} component={ReceiptScreen} />
-
+      <Stack.Screen
+  name={ROUTES.INVENTORY}
+  component={InventoryScreen}
+/>
+<Stack.Screen
+  name={ROUTES.PRODUCT_DETAIL}
+  component={ProductDetailScreen}
+/>
+<Stack.Screen
+  name={ROUTES.PRODUCT_FORM}
+  component={ProductFormScreen}
+  options={{ presentation: 'modal' }}
+/>
     </Stack.Navigator>
   );
 }
