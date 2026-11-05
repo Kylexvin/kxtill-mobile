@@ -15,10 +15,7 @@
     "android": {
       "package": "co.ke.kxbyte.kxtill",
       "googleServicesFile": "./google-services.json",
-      "adaptiveIcon": {
-        "backgroundColor": "#eeeeee",
-        "foregroundImage": "./assets/images/adaptive-icon.png"
-      },
+      "icon": "./assets/images/icon.png",
       "permissions": [
         "android.permission.CAMERA",
         "android.permission.POST_NOTIFICATIONS"

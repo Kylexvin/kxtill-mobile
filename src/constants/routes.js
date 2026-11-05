@@ -23,7 +23,11 @@ export const ROUTES = {
   BRANCH_DEVICES: 'BranchDevices',
   BRANCH_ACTIVITY: 'BranchActivity',
   BRANCH_RECEIPT: 'BranchReceipt',
-  BRANCH_SALES_LIST: 'BranchSalesList',
+  BRANCH_SALES_LIST: 'BranchSalesList',  
+  BARCODE_TOOLS: 'BarcodeTools',
+  BARCODE_GENERATE: 'BarcodeGenerate',
+  BARCODE_SCANNER: 'BarcodeScanner',
+  BARCODE_LABELS: 'BarcodeLabels',
 
   // Account stack
   KXTILL_SETTINGS: 'KxtillSettings',

@@ -2,8 +2,6 @@
 //
 // The mobile api instance (src/services/api.js) has baseURL = host only.
 // Every request must include /api/v1 explicitly, matching branches.service.js.
-// Web hits these same paths through an axios instance whose baseURL
-// already ends in /api/v1 — mobile must be explicit.
 
 import { api } from './api';
 
@@ -13,6 +11,25 @@ export async function listProducts(organizationId, params = {}) {
     { params }
   );
   return data?.items || [];
+}
+
+export async function getProducts(organizationId, params = {}) {
+  const { data } = await api.get(
+    `/api/v1/organizations/${organizationId}/kxtill/products`,
+    { params }
+  );
+  return {
+    items: data?.items || [],
+    total: data?.total ?? (data?.items?.length || 0),
+    counts: data?.counts || null,
+  };
+}
+
+export async function generateBarcode(organizationId, productId, unitId) {
+  const { data } = await api.post(
+    `/api/v1/organizations/${organizationId}/kxtill/products/${productId}/units/${unitId}/barcode`
+  );
+  return data;
 }
 
 export async function getInventoryHealth(organizationId) {
@@ -54,6 +71,8 @@ export async function archiveProduct(organizationId, productId) {
 
 export default {
   listProducts,
+  getProducts,
+  generateBarcode,
   getInventoryHealth,
   getInventorySummary,
   createProduct,

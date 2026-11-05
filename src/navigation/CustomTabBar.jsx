@@ -1,8 +1,14 @@
 // src/navigation/CustomTabBar.jsx
 //
-// Tab bar with a raised plus button. The pop-up arc is no longer drawn here:
-// it lives in <ActionsArcOverlay /> (see ActionsArc.jsx), which sits above
-// the navigator so it is never clipped. This file only toggles it.
+// Tab bar with a raised plus button. The pop-up arc lives in
+// <ActionsArcOverlay /> above the navigator.
+//
+// Reset behavior:
+//   - Tapping Business (from any tab, or again while on Business)
+//     resets the Business stack to BranchesList.
+//   - Other tabs are single screens — nothing to reset.
+//   - Arc navigations do NOT trigger a reset (they dispatch
+//     `navigate(TAB_BUSINESS, { screen })` directly).
 
 import { useCallback, useEffect } from 'react';
 import {
@@ -13,6 +19,7 @@ import {
   Animated,
   Platform,
 } from 'react-native';
+import { CommonActions } from '@react-navigation/native';
 import Ionicons from '@react-native-vector-icons/ionicons';
 import { useTheme } from '../styles/ThemeProvider';
 import { ROUTES } from '../constants/routes';
@@ -49,13 +56,22 @@ const PRIMARY = [
   },
 ];
 
+/** Reset the Business tab's inner stack back to BranchesList. */
+function resetBusinessTab(navigation) {
+  navigation.dispatch(
+    CommonActions.navigate({
+      name: ROUTES.TAB_BUSINESS,
+      params: { screen: ROUTES.BRANCHES_LIST },
+    })
+  );
+}
+
 export default function CustomTabBar({ state, navigation }) {
   const { theme: c } = useTheme();
   const bottomInset = useBottomInset();
   const { open, toggle, close, progress } = useActionsArc();
   const unreadCount = useNotificationsUnread();
 
-  // any tab change closes the arc
   useEffect(() => {
     close();
   }, [state.index, close]);
@@ -67,6 +83,12 @@ export default function CustomTabBar({ state, navigation }) {
         return;
       }
       if (open) close();
+
+      if (item.name === ROUTES.TAB_BUSINESS) {
+        resetBusinessTab(navigation);
+        return;
+      }
+
       const route = state.routes[routeIndex];
       const event = navigation.emit({
         type: 'tabPress',

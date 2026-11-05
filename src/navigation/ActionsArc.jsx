@@ -53,12 +53,12 @@ export const ARC_ITEMS = [
     short: 'Barcode',
     icon: 'barcode-outline',
   },
-  {
-    id: 'stock-count',
-    label: 'Stock count',
-    short: 'Count',
-    icon: 'clipboard-outline',
-  },
+  // {
+  //   id: 'stock-count',
+  //   label: 'Stock count',
+  //   short: 'Count',
+  //   icon: 'clipboard-outline',
+  // },
   {
     id: 'team',
     label: 'Team',

@@ -1,10 +1,13 @@
 // src/screens/branches/ReceiptScreen.jsx
 //
-// Full-screen receipt view.
+// Image-share receipt. Requires react-native-view-shot + expo-sharing
+// (already in package.json and compiled into the current dev-client build).
 //
-// The API returns a "receipt envelope":
-//   { shop, receipt, sale, items, totals, payments }
-// — NOT a flat sale row. Every read below mirrors that structure.
+// Actions:
+//   - Share receipt → capture PNG → native share sheet
+//   - WhatsApp      → capture PNG → native share sheet
+//   - SMS           → text only
+//   - Copy          → text via Share.share → user taps "Copy" in sheet
 
 import {
   useCallback,
@@ -29,6 +32,8 @@ import {
   SafeAreaView,
   useSafeAreaInsets,
 } from 'react-native-safe-area-context';
+import ViewShot from 'react-native-view-shot';
+import * as Sharing from 'expo-sharing';
 import Ionicons from '@react-native-vector-icons/ionicons';
 import { useTheme } from '../../styles/ThemeProvider';
 import { spacing, radius } from '../../styles/spacing';
@@ -57,7 +62,6 @@ function titleCase(s) {
   return str.charAt(0) + str.slice(1).toLowerCase();
 }
 
-/* Normalize the receipt envelope into the shape the JSX consumes. */
 function normalizeEnvelope(env) {
   const shop = env?.shop || {};
   const receipt = env?.receipt || {};
@@ -67,9 +71,7 @@ function normalizeEnvelope(env) {
   const items = Array.isArray(env?.items) ? env.items : [];
 
   const paymentMethodRaw =
-    payments[0]?.method ||
-    receipt?.defaultPaymentMethod ||
-    'CASH';
+    payments[0]?.method || receipt?.defaultPaymentMethod || 'CASH';
 
   return {
     shop: {
@@ -164,24 +166,13 @@ function Sk({ width, height, r = 8, style }) {
   );
 }
 
-function ReceiptSkeleton({ styles, insets }) {
+function ReceiptSkeleton({ styles }) {
   return (
     <SafeAreaView style={styles.safe} edges={['top']}>
-      <View style={[styles.topBar, { paddingTop: insets.top + 6 }]}>
-        <Sk width={40} height={40} r={20} />
-      </View>
-      <ScrollView
-        contentContainerStyle={styles.scroll}
-        scrollEnabled={false}
-      >
+      <ScrollView contentContainerStyle={styles.scroll} scrollEnabled={false}>
         <View style={styles.paper}>
           <Sk width="50%" height={18} r={6} />
-          <Sk
-            width="70%"
-            height={12}
-            r={5}
-            style={{ marginTop: 8 }}
-          />
+          <Sk width="70%" height={12} r={5} style={{ marginTop: 8 }} />
           <Sk
             width="100%"
             height={1}
@@ -234,8 +225,10 @@ export default function ReceiptScreen({ route, navigation }) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [copied, setCopied] = useState(false);
+  const [sharing, setSharing] = useState(false);
 
   const mountedRef = useRef(true);
+  const shotRef = useRef(null);
 
   useEffect(() => {
     mountedRef.current = true;
@@ -247,9 +240,7 @@ export default function ReceiptScreen({ route, navigation }) {
   const load = useCallback(async () => {
     if (!activeOrganization?.id || !saleId) {
       setLoading(false);
-      setError(
-        !saleId ? 'No sale selected.' : 'No organization loaded.'
-      );
+      setError(!saleId ? 'No sale selected.' : 'No organization loaded.');
       return;
     }
     setLoading(true);
@@ -281,8 +272,6 @@ export default function ReceiptScreen({ route, navigation }) {
     load();
   }, [load]);
 
-  /* ── derived (from the envelope) ─────────────────────────── */
-
   const data = useMemo(
     () => (envelope ? normalizeEnvelope(envelope) : null),
     [envelope]
@@ -308,8 +297,6 @@ export default function ReceiptScreen({ route, navigation }) {
   const showCashier = data?.receipt?.showCashier !== false;
   const showCustomer = data?.receipt?.showCustomer !== false;
   const showTax = data?.receipt?.showTax !== false;
-
-  /* ── share ───────────────────────────────────────────────── */
 
   const buildReceiptText = useCallback(() => {
     const lines = [];
@@ -358,33 +345,48 @@ export default function ReceiptScreen({ route, navigation }) {
     formatCurrency,
   ]);
 
-  const onPrimaryShare = async () => {
-    try {
-      await Share.share({ title: 'Receipt', message: buildReceiptText() });
-    } catch {}
-  };
+  /* ── image capture + share ──────────────────────────────── */
 
-  const onCopy = async () => {
+  const shareImage = useCallback(async () => {
+    if (sharing) return;
+    setSharing(true);
     try {
-      await Share.share({ title: 'Receipt', message: buildReceiptText() });
-      setCopied(true);
-      setTimeout(() => setCopied(false), 1500);
-    } catch {
-      Alert.alert('Copy failed', 'Could not open the share sheet.');
+      if (!shotRef.current) throw new Error('Receipt not ready');
+      const available = await Sharing.isAvailableAsync();
+      if (!available) {
+        Alert.alert(
+          'Cannot share',
+          'Sharing is not available on this device.'
+        );
+        return;
+      }
+      const uri = await shotRef.current.capture({
+        format: 'png',
+        quality: 1,
+        result: 'tmpfile',
+      });
+      await Sharing.shareAsync(uri, {
+        mimeType: 'image/png',
+        dialogTitle: 'Share receipt',
+        UTI: 'public.png',
+      });
+    } catch (e) {
+      // Fall back to text if capture or sharing fails.
+      try {
+        await Share.share({
+          title: 'Receipt',
+          message: buildReceiptText(),
+        });
+      } catch {
+        Alert.alert(
+          'Share failed',
+          e?.message || 'Could not share this receipt.'
+        );
+      }
+    } finally {
+      if (mountedRef.current) setSharing(false);
     }
-  };
-
-  const onWhatsApp = async () => {
-    const text = encodeURIComponent(buildReceiptText());
-    const url = `https://wa.me/?text=${text}`;
-    try {
-      const supported = await Linking.canOpenURL(url);
-      if (supported) await Linking.openURL(url);
-      else await Share.share({ message: buildReceiptText() });
-    } catch {
-      await Share.share({ message: buildReceiptText() });
-    }
-  };
+  }, [sharing, buildReceiptText]);
 
   const onSms = async () => {
     const text = encodeURIComponent(buildReceiptText());
@@ -397,24 +399,26 @@ export default function ReceiptScreen({ route, navigation }) {
     }
   };
 
-  /* ── render ──────────────────────────────────────────────── */
+  const onCopy = async () => {
+    try {
+      await Share.share({
+        title: 'Receipt',
+        message: buildReceiptText(),
+      });
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch {
+      Alert.alert('Copy failed', 'Could not open the share sheet.');
+    }
+  };
 
   if (loading && !data) {
-    return <ReceiptSkeleton styles={styles} insets={insets} />;
+    return <ReceiptSkeleton styles={styles} />;
   }
 
   if (error && !data) {
     return (
       <SafeAreaView style={styles.safe} edges={['top']}>
-        <View style={[styles.topBar, { paddingTop: insets.top + 6 }]}>
-          <Pressable
-            onPress={() => navigation.goBack()}
-            hitSlop={10}
-            style={styles.backChip}
-          >
-            <Ionicons name="arrow-back" size={18} color={c.textPrimary} />
-          </Pressable>
-        </View>
         <View style={styles.emptyState}>
           <Ionicons
             name="alert-circle-outline"
@@ -433,18 +437,6 @@ export default function ReceiptScreen({ route, navigation }) {
 
   return (
     <SafeAreaView style={styles.safe} edges={['top']}>
-      <View style={[styles.topBar, { paddingTop: insets.top + 6 }]}>
-        {/* <Pressable
-          onPress={() => navigation.goBack()}
-          hitSlop={10}
-          style={styles.backChip}
-          accessibilityRole="button"
-          accessibilityLabel="Back"
-        >
-          <Ionicons name="arrow-back" size={18} color={c.textPrimary} />
-        </Pressable> */}
-      </View>
-
       <ScrollView
         contentContainerStyle={[
           styles.scroll,
@@ -455,123 +447,134 @@ export default function ReceiptScreen({ route, navigation }) {
         ]}
         showsVerticalScrollIndicator={false}
       >
-        <View style={styles.paper}>
-          <View style={styles.paperHead}>
-            <Text style={styles.shopName} numberOfLines={2}>
-              {shopName}
-            </Text>
-            {branchName ? (
-              <Text style={styles.shopSub} numberOfLines={2}>
-                {branchName}
+        <ViewShot
+          ref={shotRef}
+          options={{
+            format: 'png',
+            quality: 1,
+            result: 'tmpfile',
+            backgroundColor: c.background,
+          }}
+          style={{ backgroundColor: c.background, padding: 16 }}
+        >
+          <View style={styles.paper}>
+            <View style={styles.paperHead}>
+              <Text style={styles.shopName} numberOfLines={2}>
+                {shopName}
               </Text>
-            ) : null}
-          </View>
-
-          <View style={styles.dashed} />
-
-          <View style={styles.metaGrid}>
-            <View style={styles.metaCol}>
-              <Text style={styles.metaLabel}>DATE</Text>
-              <Text style={styles.metaValue} numberOfLines={2}>
-                {fmtDateTime(createdAt) || '—'}
-              </Text>
-            </View>
-            {showCashier && cashierName ? (
-              <View style={styles.metaCol}>
-                <Text style={styles.metaLabel}>CASHIER</Text>
-                <Text style={styles.metaValue} numberOfLines={1}>
-                  {cashierName}
+              {branchName ? (
+                <Text style={styles.shopSub} numberOfLines={2}>
+                  {branchName}
                 </Text>
-              </View>
-            ) : null}
-          </View>
+              ) : null}
+            </View>
 
-          {showCustomer && customerName ? (
+            <View style={styles.dashed} />
+
             <View style={styles.metaGrid}>
               <View style={styles.metaCol}>
-                <Text style={styles.metaLabel}>CUSTOMER</Text>
-                <Text style={styles.metaValue} numberOfLines={1}>
-                  {customerName}
+                <Text style={styles.metaLabel}>DATE</Text>
+                <Text style={styles.metaValue} numberOfLines={2}>
+                  {fmtDateTime(createdAt) || '—'}
                 </Text>
               </View>
-              <View style={styles.metaCol}>
-                <Text style={styles.metaLabel}>REF</Text>
-                <Text style={styles.metaValue} numberOfLines={1}>
-                  {reference}
-                </Text>
-              </View>
+              {showCashier && cashierName ? (
+                <View style={styles.metaCol}>
+                  <Text style={styles.metaLabel}>CASHIER</Text>
+                  <Text style={styles.metaValue} numberOfLines={1}>
+                    {cashierName}
+                  </Text>
+                </View>
+              ) : null}
             </View>
-          ) : null}
 
-          <View style={styles.dashed} />
+            {showCustomer && customerName ? (
+              <View style={styles.metaGrid}>
+                <View style={styles.metaCol}>
+                  <Text style={styles.metaLabel}>CUSTOMER</Text>
+                  <Text style={styles.metaValue} numberOfLines={1}>
+                    {customerName}
+                  </Text>
+                </View>
+                <View style={styles.metaCol}>
+                  <Text style={styles.metaLabel}>REF</Text>
+                  <Text style={styles.metaValue} numberOfLines={1}>
+                    {reference}
+                  </Text>
+                </View>
+              </View>
+            ) : null}
 
-          {items.map((it) => (
-            <View key={it.id} style={styles.itemRow}>
-              <View style={{ flex: 1, minWidth: 0 }}>
-                <Text style={styles.itemName} numberOfLines={2}>
-                  {it.name}
-                </Text>
-                <Text style={styles.itemMeta} numberOfLines={1}>
-                  {it.qty}
-                  {it.unitAbbrev ? ` ${it.unitAbbrev}` : ''} ×{' '}
-                  {formatCurrency(it.unitPrice)}
-                  {it.sku ? ` · ${it.sku}` : ''}
+            <View style={styles.dashed} />
+
+            {items.map((it) => (
+              <View key={it.id} style={styles.itemRow}>
+                <View style={{ flex: 1, minWidth: 0 }}>
+                  <Text style={styles.itemName} numberOfLines={2}>
+                    {it.name}
+                  </Text>
+                  <Text style={styles.itemMeta} numberOfLines={1}>
+                    {it.qty}
+                    {it.unitAbbrev ? ` ${it.unitAbbrev}` : ''} ×{' '}
+                    {formatCurrency(it.unitPrice)}
+                    {it.sku ? ` · ${it.sku}` : ''}
+                  </Text>
+                </View>
+                <Text style={styles.itemAmount}>
+                  {formatCurrency(it.lineTotal)}
                 </Text>
               </View>
-              <Text style={styles.itemAmount}>
-                {formatCurrency(it.lineTotal)}
-              </Text>
-            </View>
-          ))}
+            ))}
 
-          <View style={styles.dashed} />
+            <View style={styles.dashed} />
 
-          <View style={styles.totalsRow}>
-            <Text style={styles.totalsLabel}>Subtotal</Text>
-            <Text style={styles.totalsValue}>
-              {formatCurrency(subtotal)}
-            </Text>
-          </View>
-          {discount ? (
             <View style={styles.totalsRow}>
-              <Text style={styles.totalsLabel}>Discount</Text>
-              <Text style={[styles.totalsValue, { color: c.success }]}>
-                −{formatCurrency(discount)}
-              </Text>
-            </View>
-          ) : null}
-          {showTax && tax ? (
-            <View style={styles.totalsRow}>
-              <Text style={styles.totalsLabel}>Tax</Text>
+              <Text style={styles.totalsLabel}>Subtotal</Text>
               <Text style={styles.totalsValue}>
-                {formatCurrency(tax)}
+                {formatCurrency(subtotal)}
               </Text>
             </View>
-          ) : null}
+            {discount ? (
+              <View style={styles.totalsRow}>
+                <Text style={styles.totalsLabel}>Discount</Text>
+                <Text style={[styles.totalsValue, { color: c.success }]}>
+                  −{formatCurrency(discount)}
+                </Text>
+              </View>
+            ) : null}
+            {showTax && tax ? (
+              <View style={styles.totalsRow}>
+                <Text style={styles.totalsLabel}>Tax</Text>
+                <Text style={styles.totalsValue}>
+                  {formatCurrency(tax)}
+                </Text>
+              </View>
+            ) : null}
 
-          <View style={styles.dashed} />
+            <View style={styles.dashed} />
 
-          <View style={styles.totalBigRow}>
-            <Text style={styles.totalBigLabel}>TOTAL</Text>
-            <Text style={styles.totalBigValue} numberOfLines={1}>
-              {formatCurrency(total)}
-            </Text>
+            <View style={styles.totalBigRow}>
+              <Text style={styles.totalBigLabel}>TOTAL</Text>
+              <Text style={styles.totalBigValue} numberOfLines={1}>
+                {formatCurrency(total)}
+              </Text>
+            </View>
+
+            <View style={styles.payRow}>
+              <Ionicons name="card-outline" size={14} color={c.textMuted} />
+              <Text style={styles.payText} numberOfLines={1}>
+                Paid via {paymentMethod}
+              </Text>
+            </View>
+
+            {receiptFooter ? (
+              <>
+                <View style={styles.dashed} />
+                <Text style={styles.footer}>{receiptFooter}</Text>
+              </>
+            ) : null}
           </View>
-
-          <View style={styles.payRow}>
-            <Ionicons name="card-outline" size={14} color={c.textMuted} />
-            <Text style={styles.payText} numberOfLines={1}>
-              Paid via {paymentMethod}
-            </Text>
-          </View>
-
-          {receiptFooter ? (
-            <>
-              <View style={styles.dashed} />
-              <Text style={styles.footer}>{receiptFooter}</Text>
-            </>
-          ) : null}
-        </View>
+        </ViewShot>
       </ScrollView>
 
       <View
@@ -583,18 +586,21 @@ export default function ReceiptScreen({ route, navigation }) {
         <Pressable
           style={({ pressed }) => [
             styles.sharePrimary,
-            pressed && { opacity: 0.9 },
+            (pressed || sharing) && { opacity: 0.9 },
           ]}
-          onPress={onPrimaryShare}
+          onPress={shareImage}
+          disabled={sharing}
           accessibilityRole="button"
           accessibilityLabel="Share receipt"
         >
           <Ionicons
-            name="share-outline"
+            name={sharing ? 'hourglass-outline' : 'share-outline'}
             size={18}
             color={c.textOnPrimary}
           />
-          <Text style={styles.sharePrimaryText}>Share receipt</Text>
+          <Text style={styles.sharePrimaryText}>
+            {sharing ? 'Preparing…' : 'Share receipt'}
+          </Text>
         </Pressable>
 
         <View style={styles.secondaryRow}>
@@ -603,7 +609,8 @@ export default function ReceiptScreen({ route, navigation }) {
             icon="logo-whatsapp"
             label="WhatsApp"
             color="#25D366"
-            onPress={onWhatsApp}
+            onPress={shareImage}
+            disabled={sharing}
           />
           <SecondaryButton
             c={c}
@@ -611,6 +618,7 @@ export default function ReceiptScreen({ route, navigation }) {
             label="SMS"
             color="#0A84FF"
             onPress={onSms}
+            disabled={sharing}
           />
           <SecondaryButton
             c={c}
@@ -625,9 +633,10 @@ export default function ReceiptScreen({ route, navigation }) {
   );
 }
 
-function SecondaryButton({ c, icon, label, color, onPress }) {
+function SecondaryButton({ c, icon, label, color, onPress, disabled }) {
   const scale = useRef(new Animated.Value(1)).current;
   const onIn = () => {
+    if (disabled) return;
     Animated.spring(scale, {
       toValue: 0.9,
       friction: 6,
@@ -635,6 +644,7 @@ function SecondaryButton({ c, icon, label, color, onPress }) {
     }).start();
   };
   const onOut = () => {
+    if (disabled) return;
     Animated.spring(scale, {
       toValue: 1,
       friction: 6,
@@ -647,6 +657,7 @@ function SecondaryButton({ c, icon, label, color, onPress }) {
         onPress={onPress}
         onPressIn={onIn}
         onPressOut={onOut}
+        disabled={disabled}
         style={({ pressed }) => [
           {
             width: 44,
@@ -657,7 +668,7 @@ function SecondaryButton({ c, icon, label, color, onPress }) {
             backgroundColor: c.surfaceElevated,
             borderWidth: 1,
             borderColor: c.border,
-            opacity: pressed ? 0.85 : 1,
+            opacity: disabled ? 0.5 : pressed ? 0.85 : 1,
           },
         ]}
         accessibilityRole="button"
@@ -679,29 +690,10 @@ function SecondaryButton({ c, icon, label, color, onPress }) {
   );
 }
 
-/* ── styles ──────────────────────────────────────────────────── */
-
 const makeStyles = (c) =>
   StyleSheet.create({
     safe: { flex: 1, backgroundColor: c.background },
     scroll: { paddingHorizontal: spacing.xl, paddingTop: spacing.sm },
-
-    topBar: {
-      flexDirection: 'row',
-      alignItems: 'center',
-      paddingHorizontal: spacing.lg,
-      paddingBottom: spacing.sm,
-    },
-    backChip: {
-      width: 40,
-      height: 40,
-      borderRadius: 20,
-      backgroundColor: c.surface,
-      borderWidth: 1,
-      borderColor: c.border,
-      alignItems: 'center',
-      justifyContent: 'center',
-    },
 
     paper: {
       backgroundColor: c.surface,

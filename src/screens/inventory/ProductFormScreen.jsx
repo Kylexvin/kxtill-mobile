@@ -51,6 +51,7 @@ import { KXTILL } from '../../constants/permissions';
 const BLANK = {
   name: '',
   sku: '',
+  barcode: '',  
   category: '',
   cost: '',
   price: '',
@@ -393,6 +394,7 @@ export default function ProductFormScreen({ route, navigation }) {
 
   const mode = route.params?.mode || 'create';
   const initial = route.params?.product || null;
+  const initialBarcode = route.params?.initialBarcode || null;
 
   const isPharmacyOrg = useMemo(
     () => productInstances?.some((i) => i.vertical === 'pharmacy'),
@@ -402,26 +404,29 @@ export default function ProductFormScreen({ route, navigation }) {
   const canUpdate = can(KXTILL.INVENTORY.UPDATE);
   const allowed = mode === 'create' ? canCreate : canUpdate;
 
-  const [form, setForm] = useState(() => {
-    if (!initial) return BLANK;
-    const bu = initial.baseUnit || {};
-    const ph = initial.pharmacyProduct || {};
-    return {
-      name: initial.name || '',
-      sku: initial.sku || '',
-      category: initial.category || '',
-      cost: String(initial.cost ?? ''),
-      price: String(bu.price ?? initial.price ?? ''),
-      unitName: bu.name || 'Piece',
-      unitAbbr: bu.abbreviation || 'pc',
-      minStock: String(initial.branchProducts?.[0]?.minStock ?? ''),
-      trackInventory: initial.trackInventory !== false,
-      isMedicine: !!initial.pharmacyProduct,
-      genericName: ph.genericName || '',
-      strength: ph.strength || '',
-      dosageForm: ph.dosageForm || 'CAPSULE',
-    };
-  });
+const [form, setForm] = useState(() => {
+  if (!initial) {
+    return { ...BLANK, barcode: initialBarcode || '' };
+  }
+  const bu = initial.baseUnit || {};
+  const ph = initial.pharmacyProduct || {};
+  return {
+    name: initial.name || '',
+    sku: initial.sku || '',
+    category: initial.category || '',
+    cost: String(initial.cost ?? ''),
+    price: String(bu.price ?? initial.price ?? ''),
+    unitName: bu.name || 'Piece',
+    unitAbbr: bu.abbreviation || 'pc',
+    barcode: bu.barcode || '',            // ← ADD
+    minStock: String(initial.branchProducts?.[0]?.minStock ?? ''),
+    trackInventory: initial.trackInventory !== false,
+    isMedicine: !!initial.pharmacyProduct,
+    genericName: ph.genericName || '',
+    strength: ph.strength || '',
+    dosageForm: ph.dosageForm || 'CAPSULE',
+  };
+});
 
   const [step, setStep] = useState(1);
   const [submitting, setSubmitting] = useState(false);
@@ -515,6 +520,7 @@ export default function ProductFormScreen({ route, navigation }) {
       baseUnit: {
         name: form.unitName.trim(),
         abbreviation: form.unitAbbr.trim(),
+        barcode: form.barcode?.trim() || undefined, 
         price: Number(form.price),
       },
     };
@@ -911,7 +917,18 @@ export default function ProductFormScreen({ route, navigation }) {
                     </View>
                   </View>
                 </View>
-
+<Field label="Barcode" optional styles={styles} c={c}>
+  <TextInput
+    value={form.barcode}
+    onChangeText={(v) => set('barcode', v)}
+    placeholder="e.g. 2000000000015"
+    placeholderTextColor={c.textMuted}
+    keyboardType="number-pad"
+    autoCapitalize="none"
+    autoCorrect={false}
+    style={styles.input}
+  />
+</Field>
                 <Field
                   label="Min stock"
                   optional
