@@ -48,10 +48,10 @@ const FRAME_W = 280;
 const FRAME_H = 180;
 const CORNER = 34;
 const SHEET_OFFSET = 640;
-// expo-camera scans the WHOLE preview, so we filter to the frame ourselves.
-// Set false if bounds look wrong on a particular Android device.
-const STRICT_REGION = true;
-const REGION_PAD = 24;
+// expo-camera scans the WHOLE preview. With the frame visually centered on
+// screen but bounds relative to the camera box, strict region checking
+// rejects valid scans. Keep false for reliability.
+const STRICT_REGION = false;
 
 /* ── helpers ──────────────────────────────────────────────── */
 
@@ -304,17 +304,19 @@ export default function BarcodeScannerScreen({ navigation }) {
     ({ data, bounds }) => {
       if (lockRef.current) return;
 
-      // Only accept codes whose centre sits inside the visible frame.
+      // Region check disabled (STRICT_REGION=false). If re-enabled, bounds
+      // are relative to cameraWrap, not the screen overlay.
       if (STRICT_REGION && bounds?.origin && bounds?.size && cam.w && cam.h) {
         const cx = bounds.origin.x + bounds.size.width / 2;
         const cy = bounds.origin.y + bounds.size.height / 2;
-        const left = (cam.w - FRAME_W) / 2 - REGION_PAD;
-        const top = (cam.h - FRAME_H) / 2 - REGION_PAD;
+        const left = (cam.w - FRAME_W) / 2;
+        const top = (cam.h - FRAME_H) / 2;
+        const pad = 24;
         const inside =
-          cx >= left &&
-          cx <= left + FRAME_W + REGION_PAD * 2 &&
-          cy >= top &&
-          cy <= top + FRAME_H + REGION_PAD * 2;
+          cx >= left - pad &&
+          cx <= left + FRAME_W + pad &&
+          cy >= top - pad &&
+          cy <= top + FRAME_H + pad;
         if (!inside) return;
       }
 
@@ -444,7 +446,7 @@ export default function BarcodeScannerScreen({ navigation }) {
         </Pressable>
       </View>
 
-      {/* camera card: frame is centred in THIS box */}
+      {/* camera card */}
       <View
         style={styles.cameraWrap}
         onLayout={(e) =>
@@ -476,16 +478,16 @@ export default function BarcodeScannerScreen({ navigation }) {
             ]}
           />
         ) : null}
+      </View>
 
-        <View pointerEvents="none" style={styles.scanArea}>
-          <View style={styles.scanFrame}>
-            <Corners color={bracketColor} />
-            <ScanLine active={!scanned} color={BRAND} />
-          </View>
+      {/* Frame overlay — centered on the whole screen */}
+      <View pointerEvents="none" style={styles.frameOverlay}>
+        <View style={styles.scanFrame}>
+          <Corners color={bracketColor} />
+          <ScanLine active={!scanned} color={BRAND} />
         </View>
-
         {!showResult ? (
-          <View pointerEvents="none" style={styles.hintPill}>
+          <View style={styles.hintPill}>
             {lookupState === 'loading' ? (
               <ActivityIndicator size="small" color="#FFFFFF" />
             ) : null}
@@ -729,17 +731,17 @@ const makeStyles = (c) =>
       alignItems: 'center',
       justifyContent: 'center',
     },
-    scanArea: {
+
+    // Frame overlay — centered on the screen
+    frameOverlay: {
       ...StyleSheet.absoluteFillObject,
       alignItems: 'center',
       justifyContent: 'center',
+      paddingBottom: 80, // nudge up so it sits between top bar and dock
     },
     scanFrame: { width: FRAME_W, height: FRAME_H },
     hintPill: {
-      position: 'absolute',
-      alignSelf: 'center',
-      top: '50%',
-      marginTop: FRAME_H / 2 + 20,
+      marginTop: 20,
       flexDirection: 'row',
       alignItems: 'center',
       gap: 8,
