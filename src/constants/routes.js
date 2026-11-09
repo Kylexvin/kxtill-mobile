@@ -36,6 +36,12 @@ export const ROUTES = {
   PRODUCT_DETAIL: 'ProductDetail',
   PRODUCT_FORM: 'ProductForm',
 
+    // POS (branch-scoped, full-screen during sale)
+  POS: 'Pos',
+  POS_CART: 'PosCart',
+  POS_CHECKOUT: 'PosCheckout',
+  POS_RECEIPT: 'PosReceipt',
+
   // Reserved — referenced in code comments, not currently mounted
   // DASHBOARD / BRANCHES / BRANCH_DETAILS / REPORTS / REPORT_DETAILS /
   // STOCK_OVERVIEW / PRODUCT_DETAILS / SHIFTS / SHIFT_DETAILS /

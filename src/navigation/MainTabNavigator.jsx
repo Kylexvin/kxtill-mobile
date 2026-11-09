@@ -26,6 +26,21 @@ export default function MainTabNavigator() {
     if (!item) return;
 
     switch (item.id) {
+      case 'pos':
+        navigationRef.dispatch(
+          CommonActions.navigate({
+            name: ROUTES.TAB_BUSINESS,
+            params: {
+              screen: ROUTES.POS,
+              params: {
+                branchId: activeBranch?.id ?? null,
+                branchName: activeBranch?.name ?? null,
+              },
+            },
+          })
+        );
+        break;
+
       case 'share-receipt':
         navigationRef.dispatch(
           CommonActions.navigate({
@@ -59,23 +74,14 @@ export default function MainTabNavigator() {
         );
         break;
 
-      case 'stock-count':
+      case 'barcode-tool':
         navigationRef.dispatch(
           CommonActions.navigate({
             name: ROUTES.TAB_BUSINESS,
-            params: { screen: ROUTES.INVENTORY },
+            params: { screen: ROUTES.BARCODE_TOOLS },
           })
         );
         break;
-
-case 'barcode-tool':
-  navigationRef.dispatch(
-    CommonActions.navigate({
-      name: ROUTES.TAB_BUSINESS,
-      params: { screen: ROUTES.BARCODE_TOOLS },
-    })
-  );
-  break;
 
       default:
         break;

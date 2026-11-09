@@ -25,6 +25,22 @@ export async function getProducts(organizationId, params = {}) {
   };
 }
 
+// Branch-scoped product list. Each item carries `stock`, `baseUnit`,
+// `units[]`, `price`, `isAvailable` — everything POS needs without a
+// second call per product.
+export async function getBranchProducts(organizationId, branchId, params = {}) {
+  const { data } = await api.get(
+    `/api/v1/organizations/${organizationId}/kxtill/branches/${branchId}/products`,
+    { params }
+  );
+  return {
+    items: data?.items || [],
+    total: data?.total ?? (data?.items?.length || 0),
+    limit: data?.limit ?? null,
+    offset: data?.offset ?? null,
+  };
+}
+
 export async function generateBarcode(organizationId, productId, unitId) {
   const { data } = await api.post(
     `/api/v1/organizations/${organizationId}/kxtill/products/${productId}/units/${unitId}/barcode`
@@ -72,6 +88,7 @@ export async function archiveProduct(organizationId, productId) {
 export default {
   listProducts,
   getProducts,
+  getBranchProducts,
   generateBarcode,
   getInventoryHealth,
   getInventorySummary,

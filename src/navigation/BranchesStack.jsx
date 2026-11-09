@@ -14,6 +14,7 @@ import ReceiptScreen from '../screens/branches/ReceiptScreen';
 import InventoryScreen from '../screens/inventory/InventoryScreen';
 import ProductFormScreen from '../screens/inventory/ProductFormScreen';
 import ProductDetailScreen from '../screens/inventory/ProductDetailScreen';
+import PosScreen from '../screens/pos/PosScreen';
 
 import BarcodeToolsScreen from '../screens/branches/barcode/BarcodeToolsScreen';
 import BarcodeScannerScreen from '../screens/branches/barcode/BarcodeScannerScreen';
@@ -40,6 +41,13 @@ export default function BranchesStack() {
         name={ROUTES.PRODUCT_FORM}
         component={ProductFormScreen}
         options={{ presentation: 'modal' }}
+      />
+
+      {/* POS — full-screen during sale so the tab bar doesn't compete */}
+      <Stack.Screen
+        name={ROUTES.POS}
+        component={PosScreen}
+        options={{ presentation: 'fullScreenModal' }}
       />
 
       {/* Barcode tools */}
