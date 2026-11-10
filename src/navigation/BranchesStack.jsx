@@ -1,5 +1,7 @@
 // src/navigation/BranchesStack.jsx
 
+import { useEffect } from 'react';
+import { useNavigation, CommonActions } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { ROUTES } from '../constants/routes';
 import BranchesScreen from '../screens/branches/BranchesScreen';
@@ -23,6 +25,43 @@ import BarcodeLabelsScreen from '../screens/branches/barcode/BarcodeLabelsScreen
 
 const Stack = createNativeStackNavigator();
 
+/**
+ * Auto-root guard.
+ *
+ * Deep screens (POS, Product Form) can be pushed directly by the action arc
+ * or dashboard quick actions without a parent screen. In that case back
+ * navigation has nothing to return to.
+ *
+ * When this wrapper mounts and finds itself alone at the bottom of the
+ * Business stack, it rewrites the stack to [BranchesScreen, currentScreen]
+ * so back always lands on BranchesScreen.
+ *
+ * Runs once on mount; no-op when the screen already has a parent.
+ */
+function AutoRoot({ children }) {
+  const navigation = useNavigation();
+
+  useEffect(() => {
+    const state = navigation.getState();
+    if (!state) return;
+    const routes = state.routes || [];
+    if (routes.length === 1) {
+      const current = routes[0];
+      navigation.dispatch(
+        CommonActions.reset({
+          index: 1,
+          routes: [
+            { name: ROUTES.BRANCHES_LIST },
+            { name: current.name, params: current.params },
+          ],
+        })
+      );
+    }
+  }, [navigation]);
+
+  return children;
+}
+
 export default function BranchesStack() {
   return (
     <Stack.Navigator screenOptions={{ headerShown: false }}>
@@ -37,20 +76,29 @@ export default function BranchesStack() {
       <Stack.Screen name={ROUTES.BRANCH_RECEIPT} component={ReceiptScreen} />
       <Stack.Screen name={ROUTES.INVENTORY} component={InventoryScreen} />
       <Stack.Screen name={ROUTES.PRODUCT_DETAIL} component={ProductDetailScreen} />
+
       <Stack.Screen
         name={ROUTES.PRODUCT_FORM}
-        component={ProductFormScreen}
         options={{ presentation: 'modal' }}
-      />
+      >
+        {({ route, navigation }) => (
+          <AutoRoot>
+            <ProductFormScreen route={route} navigation={navigation} />
+          </AutoRoot>
+        )}
+      </Stack.Screen>
 
-      {/* POS — full-screen during sale so the tab bar doesn't compete */}
       <Stack.Screen
         name={ROUTES.POS}
-        component={PosScreen}
         options={{ presentation: 'fullScreenModal' }}
-      />
+      >
+        {({ route, navigation }) => (
+          <AutoRoot>
+            <PosScreen route={route} navigation={navigation} />
+          </AutoRoot>
+        )}
+      </Stack.Screen>
 
-      {/* Barcode tools */}
       <Stack.Screen
         name={ROUTES.BARCODE_TOOLS}
         component={BarcodeToolsScreen}

@@ -1,13 +1,10 @@
 // src/screens/pos/PosScreen.jsx
-//
-// POS orchestrator. State wiring + component composition only.
 
 import { useEffect, useMemo, useState } from 'react';
 import {
   View,
   Text,
   Pressable,
-  ActivityIndicator,
   Alert,
   StyleSheet,
 } from 'react-native';
@@ -18,10 +15,17 @@ import {
 import { useNavigation, useRoute } from '@react-navigation/native';
 import Ionicons from '@react-native-vector-icons/ionicons';
 import { useTheme } from '../../styles/ThemeProvider';
-import { spacing } from '../../styles/spacing';
+import { spacing, radius } from '../../styles/spacing';
 import { typography } from '../../styles/typography';
 import { useOrganizationContext } from '../../context/OrganizationContext';
 import { useSettings } from '../../context/SettingsContext';
+import { usePermissionsContext } from '../../context/PermissionsContext';
+import { KXTILL } from '../../constants/permissions';
+import { BRAND_ICONS } from '../../constants/config';
+// M-Pesa brand green — intentional, not a theme token.
+// M-Pesa's identity is green; it must stay green regardless of theme.
+const MPESA_GREEN = '#10B981';
+
 import {
   usePosGate,
   usePosProducts,
@@ -42,29 +46,66 @@ import {
   PosReceiptModal,
   PosVariantModal,
 } from './PosModals';
-import { PosPaymentModal, PosCartModal, PosHeldModal } from './PosSheets';
+import {
+  PosPaymentModal,
+  PosCartModal,
+  PosHeldModal,
+  PosShiftModal,
+} from './PosSheets';
+import PosBarcodeScanner from './PosBarcodeScanner';
+import PosLoader from './PosLoader';
+import * as outbox from '../../offline/outbox';
+import { usePosMpesa } from './usePosMpesa';
 
 const catLabel = (cat) =>
   !cat ? null : typeof cat === 'string' ? cat : cat.name || null;
 
 export default function PosScreen() {
   const { theme: c } = useTheme();
-  const styles = useStyles(c);
+  const styles = useMemo(() => makeStyles(c), [c]);
   const navigation = useNavigation();
   const route = useRoute();
   const insets = useSafeAreaInsets();
 
-  const { activeOrganization, activeBranch } = useOrganizationContext();
-  const { formatCurrency } = useSettings();
+  const {
+    activeOrganization,
+    activeBranch,
+    branches,
+    setActiveBranch,
+    ready: orgReady,
+  } = useOrganizationContext();
+  const {
+    formatCurrency,
+    settings: orgSettings,
+    loading: settingsLoading,
+    error: settingsError,
+    refreshSettings,
+  } = useSettings();
+
+  const {
+    can,
+    loading: permsLoading,
+    error: permsError,
+    permissions,
+    refresh: refreshPermissions,
+  } = usePermissionsContext();
+
+  const canSell = can(KXTILL.SALES.CREATE);
+  const permsNotReady =
+    permsLoading || (!permsError && permissions.length === 0);
 
   const orgId = activeOrganization?.id ?? null;
   const branchId = route.params?.branchId ?? activeBranch?.id ?? null;
 
-  const { gate, runGate, openShift } = usePosGate({ orgId, branchId });
+  const { gate, runGate, openShift, closeShift } = usePosGate({
+    orgId,
+    branchId,
+    contextReady: orgReady,
+  });
   const productsState = usePosProducts({
     orgId,
     branchId,
-    enabled: gate.status === 'ready',
+    enabled: gate.status === 'ready' && canSell,
   });
   const cartState = usePosCart();
   const saleState = usePosSale({
@@ -78,8 +119,8 @@ export default function PosScreen() {
     clearCart: cartState.clearCart,
   });
   const receiptState = usePosReceipt({ orgId });
+  const mpesa = usePosMpesa(orgId);
 
-  const [searchOpen, setSearchOpen] = useState(false);
   const [category, setCategory] = useState(null);
   const [cartOpen, setCartOpen] = useState(false);
   const [heldOpen, setHeldOpen] = useState(false);
@@ -87,18 +128,44 @@ export default function PosScreen() {
   const [payOpen, setPayOpen] = useState(false);
   const [variantProduct, setVariantProduct] = useState(null);
   const [method, setMethod] = useState('CASH');
+  const [methodsFirst, setMethodsFirst] = useState(false);
   const [reference, setReference] = useState('');
+  const [phone, setPhone] = useState('');
   const [lastSaleId, setLastSaleId] = useState(null);
+  const [lastClientId, setLastClientId] = useState(null);
   const [snackOpen, setSnackOpen] = useState(false);
+  const [scanOpen, setScanOpen] = useState(false);
 
-  // TODO: wire to your sync engine ('synced' | 'pending' | 'offline')
-  const syncStatus = 'synced';
+  // Shift modal state
+  const [shiftModal, setShiftModal] = useState({
+    open: false,
+    mode: 'open', // 'open' | 'close' | 'blocked-close'
+    shiftId: null,
+    shift: null,
+  });
+  const [shiftSubmitting, setShiftSubmitting] = useState(false);
+
+  const counts = outbox.useOutboxCounts();
+
+  useEffect(() => outbox.startWorker(), []);
+
+  const syncStatus = counts.pending > 0 ? 'pending' : 'synced';
+
+  // Loader steps derived from real state — no fake timers.
+  const loaderSteps = useMemo(
+    () => [
+      { label: 'Checking access', done: !permsNotReady },
+      { label: 'Loading till settings', done: !!orgSettings },
+      { label: 'Preparing shift', done: gate.status !== 'loading' },
+    ],
+    [permsNotReady, orgSettings, gate.status]
+  );
 
   useEffect(() => {
     if (!snackOpen) return undefined;
     const t = setTimeout(() => setSnackOpen(false), 5000);
     return () => clearTimeout(t);
-  }, [snackOpen, lastSaleId]);
+  }, [snackOpen, lastSaleId, lastClientId]);
 
   const categories = useMemo(() => {
     const set = new Set();
@@ -125,19 +192,27 @@ export default function PosScreen() {
     return map;
   }, [cartState.cart]);
 
-  const openPayment = (m) => {
+  const openPayment = (m, withMethods = false) => {
     if (cartState.cart.length === 0) return;
     setMethod(m);
+    setMethodsFirst(withMethods);
     setReference('');
+    mpesa.reset();
+    setPhone('');
     setPayOpen(true);
   };
 
-  const confirmPayment = async () => {
+  const confirmPayment = async (ref) => {
     try {
-      const sale = await saleState.submitSale({ method, reference });
+      const sale = await saleState.submitSale({
+        method,
+        reference: typeof ref === 'string' ? ref : reference,
+      });
       setPayOpen(false);
-      setLastSaleId(sale.id);
+      setLastSaleId(sale.id ?? null);
+      setLastClientId(sale.clientSaleId ?? null);
       setSnackOpen(true);
+      productsState.reload();
     } catch (e) {
       Alert.alert(
         'Sale failed',
@@ -149,6 +224,29 @@ export default function PosScreen() {
     }
   };
 
+  const sendMpesaPrompt = async () => {
+    const receipt = await mpesa.start({
+      phone,
+      amount: cartState.subtotal,
+      referenceId: cartState.clientSaleIdRef.current,
+    });
+    if (receipt) {
+      setReference(receipt);
+      confirmPayment(receipt);
+    }
+  };
+
+  const showLastReceipt = async () => {
+    const id =
+      lastSaleId ||
+      (lastClientId ? await outbox.getSyncedSaleId(lastClientId) : null);
+    if (!id) {
+      Alert.alert('Receipt', 'Available once the sale has synced.');
+      return;
+    }
+    receiptState.show(id);
+  };
+
   const handleAdd = (item) => {
     const units = item.units || [];
     if (units.length > 1) {
@@ -158,49 +256,199 @@ export default function PosScreen() {
     cartState.addToCart(item, units[0] || item.baseUnit);
   };
 
-  const openMenu = () => {
-    const buttons = [];
-    if (lastSaleId) {
-      buttons.push({ text: 'Last receipt', onPress: () => receiptState.show(lastSaleId) });
+  const handleBarcodeScanned = (hit) => {
+    setScanOpen(false);
+    if (!hit?.product) return;
+    const { product, unit } = hit;
+    if (!product.isAvailable) {
+      Alert.alert('Unavailable', `${product.name} is not available.`);
+      return;
     }
-    buttons.push({
-      text: 'Clear cart',
-      style: 'destructive',
-      onPress: cartState.clearCart,
+    cartState.addToCart(product, unit || product.baseUnit || product.units?.[0]);
+  };
+
+  /* ── shift handlers ──────────────────────────────────────── */
+
+  const handleOpenShift = async (openingFloat) => {
+    setShiftSubmitting(true);
+    try {
+      await openShift(openingFloat);
+      setShiftModal({ open: false, mode: 'open', shiftId: null, shift: null });
+    } catch (e) {
+      Alert.alert(
+        'Open failed',
+        e?.response?.data?.error || e?.message || 'Could not open shift'
+      );
+    } finally {
+      setShiftSubmitting(false);
+    }
+  };
+
+  const handleCloseShift = async (declaredCash) => {
+    if (!shiftModal.shiftId) return;
+    setShiftSubmitting(true);
+    try {
+      const closed = await closeShift(shiftModal.shiftId, declaredCash);
+      setShiftModal({ open: false, mode: 'open', shiftId: null, shift: null });
+      const variance =
+        closed?.variance != null ? Number(closed.variance) : null;
+      if (variance != null && variance !== 0) {
+        Alert.alert(
+          'Shift closed',
+          variance > 0
+            ? `Overage: ${formatCurrency(Math.abs(variance))}`
+            : `Shortage: ${formatCurrency(Math.abs(variance))}`
+        );
+      }
+    } catch (e) {
+      Alert.alert(
+        'Close failed',
+        e?.response?.data?.error || e?.message || 'Could not close shift'
+      );
+    } finally {
+      setShiftSubmitting(false);
+    }
+  };
+
+  const openShiftModal = (mode, shift = null) => {
+    setShiftModal({
+      open: true,
+      mode,
+      shiftId: shift?.id ?? null,
+      shift,
     });
-    buttons.push({ text: 'Close POS', onPress: () => navigation.goBack() });
-    Alert.alert('Menu', undefined, buttons);
   };
 
   /* ── gate states ─────────────────────────────────────────── */
 
-  if (gate.status === 'loading') {
+  if (permsNotReady) {
     return (
       <SafeAreaView style={styles.center}>
-        <ActivityIndicator color={c.primary} />
-        <Text style={styles.centerText}>Preparing POS…</Text>
+        <PosLoader steps={loaderSteps} logo={BRAND_ICONS.kxtill} c={c} />
       </SafeAreaView>
     );
   }
-  if (gate.status === 'error' || gate.status === 'blocked') {
+
+  if (permsError && permissions.length === 0) {
     return (
       <SafeAreaView style={styles.center}>
-        <Ionicons name="alert-circle-outline" size={28} color={c.danger} />
-        <Text style={styles.centerTitle}>
-          {gate.status === 'blocked' ? 'Shift conflict' : 'POS unavailable'}
-        </Text>
-        <Text style={styles.centerText}>{gate.error}</Text>
-        {gate.status === 'error' ? (
-          <Pressable onPress={runGate} style={styles.centerBtn}>
-            <Text style={styles.centerBtnText}>Retry</Text>
-          </Pressable>
-        ) : null}
+        <Ionicons name="cloud-offline-outline" size={28} color={c.danger} />
+        <Text style={styles.centerTitle}>Couldn't verify access</Text>
+        <Text style={styles.centerText}>{permsError}</Text>
+        <Pressable onPress={refreshPermissions} style={styles.centerBtn}>
+          <Text style={styles.centerBtnText}>Retry</Text>
+        </Pressable>
         <Pressable onPress={() => navigation.goBack()} style={styles.centerLink}>
           <Text style={styles.centerLinkText}>Close</Text>
         </Pressable>
       </SafeAreaView>
     );
   }
+
+  if (!canSell) {
+    return (
+      <SafeAreaView style={styles.center}>
+        <Ionicons name="lock-closed-outline" size={28} color={c.link} />
+        <Text style={styles.centerTitle}>POS not available</Text>
+        <Text style={styles.centerText}>
+          You don't have permission to create sales. Ask an admin to grant you
+          access.
+        </Text>
+        <Pressable onPress={() => navigation.goBack()} style={styles.centerBtn}>
+          <Text style={styles.centerBtnText}>Go back</Text>
+        </Pressable>
+      </SafeAreaView>
+    );
+  }
+
+  if (!orgSettings && settingsLoading) {
+    return (
+      <SafeAreaView style={styles.center}>
+        <PosLoader steps={loaderSteps} logo={BRAND_ICONS.kxtill} c={c} />
+      </SafeAreaView>
+    );
+  }
+
+  if (!orgSettings) {
+    return (
+      <SafeAreaView style={styles.center}>
+        <Ionicons name="settings-outline" size={28} color={c.danger} />
+        <Text style={styles.centerTitle}>Till settings unavailable</Text>
+        <Text style={styles.centerText}>
+          This till needs to load its currency, tax number and receipt details
+          once before it can sell. Connect to the internet and try again.
+        </Text>
+        {settingsError ? (
+          <Text style={[styles.centerText, { color: c.danger }]}>
+            {settingsError}
+          </Text>
+        ) : null}
+        <Pressable onPress={refreshSettings} style={styles.centerBtn}>
+          <Text style={styles.centerBtnText}>Retry</Text>
+        </Pressable>
+        <Pressable onPress={() => navigation.goBack()} style={styles.centerLink}>
+          <Text style={styles.centerLinkText}>Close</Text>
+        </Pressable>
+      </SafeAreaView>
+    );
+  }
+
+  if (gate.status === 'loading') {
+    return (
+      <SafeAreaView style={styles.center}>
+        <PosLoader steps={loaderSteps} logo={BRAND_ICONS.kxtill} c={c} />
+      </SafeAreaView>
+    );
+  }
+
+  if (gate.status === 'blocked') {
+    return (
+      <SafeAreaView style={styles.center}>
+        <Ionicons name="alert-circle-outline" size={28} color={c.danger} />
+        <Text style={styles.centerTitle}>Shift conflict</Text>
+        <Text style={styles.centerText}>{gate.error}</Text>
+        <Pressable
+          onPress={() => openShiftModal('blocked-close', gate.blockedShift)}
+          style={styles.centerBtn}
+        >
+          <Text style={styles.centerBtnText}>Close that shift</Text>
+        </Pressable>
+        <Pressable onPress={() => navigation.goBack()} style={styles.centerLink}>
+          <Text style={styles.centerLinkText}>Cancel</Text>
+        </Pressable>
+        <PosShiftModal
+          visible={shiftModal.open}
+          mode="blocked-close"
+          shift={shiftModal.shift}
+          submitting={shiftSubmitting}
+          onClose={() =>
+            setShiftModal({ open: false, mode: 'open', shiftId: null, shift: null })
+          }
+          onCloseShift={handleCloseShift}
+          formatCurrency={formatCurrency}
+          c={c}
+          styles={styles}
+        />
+      </SafeAreaView>
+    );
+  }
+
+  if (gate.status === 'error') {
+    return (
+      <SafeAreaView style={styles.center}>
+        <Ionicons name="alert-circle-outline" size={28} color={c.danger} />
+        <Text style={styles.centerTitle}>POS unavailable</Text>
+        <Text style={styles.centerText}>{gate.error}</Text>
+        <Pressable onPress={runGate} style={styles.centerBtn}>
+          <Text style={styles.centerBtnText}>Retry</Text>
+        </Pressable>
+        <Pressable onPress={() => navigation.goBack()} style={styles.centerLink}>
+          <Text style={styles.centerLinkText}>Close</Text>
+        </Pressable>
+      </SafeAreaView>
+    );
+  }
+
   if (gate.status === 'no-shift') {
     return (
       <SafeAreaView style={styles.center}>
@@ -209,9 +457,49 @@ export default function PosScreen() {
         <Text style={styles.centerText}>
           This branch requires an open shift before taking sales.
         </Text>
-        <Pressable onPress={openShift} style={styles.centerBtn}>
+        <Pressable
+          onPress={() => openShiftModal('open')}
+          style={styles.centerBtn}
+        >
           <Text style={styles.centerBtnText}>Open shift</Text>
         </Pressable>
+        <Pressable onPress={() => navigation.goBack()} style={styles.centerLink}>
+          <Text style={styles.centerLinkText}>Cancel</Text>
+        </Pressable>
+        <PosShiftModal
+          visible={shiftModal.open}
+          mode="open"
+          branchName={activeBranch?.name}
+          submitting={shiftSubmitting}
+          onClose={() =>
+            setShiftModal({ open: false, mode: 'open', shiftId: null, shift: null })
+          }
+          onOpenShift={handleOpenShift}
+          formatCurrency={formatCurrency}
+          c={c}
+          styles={styles}
+        />
+      </SafeAreaView>
+    );
+  }
+
+  if (gate.status === 'no-branch') {
+    return (
+      <SafeAreaView style={styles.center}>
+        <Ionicons name="business-outline" size={28} color={c.link} />
+        <Text style={styles.centerTitle}>Choose a branch</Text>
+        <Text style={styles.centerText}>
+          This organization has more than one branch. Pick one to start selling.
+        </Text>
+        {branches.map((b) => (
+          <Pressable
+            key={b.id}
+            onPress={() => setActiveBranch(b)}
+            style={styles.centerBtn}
+          >
+            <Text style={styles.centerBtnText}>{b.name}</Text>
+          </Pressable>
+        ))}
         <Pressable onPress={() => navigation.goBack()} style={styles.centerLink}>
           <Text style={styles.centerLinkText}>Cancel</Text>
         </Pressable>
@@ -227,27 +515,27 @@ export default function PosScreen() {
     <SafeAreaView style={styles.safe} edges={['top']}>
       <PosHeader
         syncStatus={syncStatus}
+        pendingCount={counts.pending}
         heldCount={cartState.held.length}
         totalQty={cartState.totalQty}
         subtotal={cartState.subtotal}
-        onSearch={() => setSearchOpen((v) => !v)}
+        onScan={() => setScanOpen(true)}
         onHeld={() => setHeldOpen(true)}
         onCart={() => setCartOpen(true)}
-        onMenu={openMenu}
+        onCloseShift={
+          gate.shift ? () => openShiftModal('close', gate.shift) : undefined
+        }
         formatCurrency={formatCurrency}
         c={c}
         styles={styles}
       />
 
-      {searchOpen ? (
-        <PosSearchBar
-          query={productsState.query}
-          setQuery={productsState.setQuery}
-          onClose={() => setSearchOpen(false)}
-          c={c}
-          styles={styles}
-        />
-      ) : null}
+      <PosSearchBar
+        query={productsState.query}
+        setQuery={productsState.setQuery}
+        c={c}
+        styles={styles}
+      />
 
       <PosCategoryChips
         categories={categories}
@@ -262,6 +550,7 @@ export default function PosScreen() {
           products={visibleProducts}
           inCart={inCart}
           searching={productsState.searching}
+          loadedOnce={productsState.loadedOnce}
           error={productsState.error}
           query={productsState.query}
           onAdd={handleAdd}
@@ -274,7 +563,7 @@ export default function PosScreen() {
           visible={snackOpen}
           onReceipt={() => {
             setSnackOpen(false);
-            receiptState.show(lastSaleId);
+            showLastReceipt();
           }}
           c={c}
           styles={styles}
@@ -285,9 +574,11 @@ export default function PosScreen() {
         totalQty={cartState.totalQty}
         subtotal={cartState.subtotal}
         cartEmpty={cartEmpty}
-        onUndo={cartState.undoLast}
         onPayCash={() => openPayment('CASH')}
         onPayMpesa={() => openPayment('MPESA')}
+        onCloseShift={
+          gate.shift ? () => openShiftModal('close', gate.shift) : undefined
+        }
         formatCurrency={formatCurrency}
         bottomInset={insets.bottom}
         c={c}
@@ -356,6 +647,12 @@ export default function PosScreen() {
         setReference={setReference}
         onClose={() => setPayOpen(false)}
         onConfirm={confirmPayment}
+        mpesa={mpesa}
+        phone={phone}
+        setPhone={setPhone}
+        onSendPrompt={sendMpesaPrompt}
+        onCancelPrompt={mpesa.reset}
+        startWithMethods={methodsFirst}
         formatCurrency={formatCurrency}
         c={c}
         styles={styles}
@@ -383,23 +680,46 @@ export default function PosScreen() {
         c={c}
         styles={styles}
       />
+
+      <PosBarcodeScanner
+        visible={scanOpen}
+        onClose={() => setScanOpen(false)}
+        orgId={orgId}
+        branchId={branchId}
+        onScanned={handleBarcodeScanned}
+        c={c}
+      />
+
+      <PosShiftModal
+        visible={shiftModal.open}
+        mode={shiftModal.mode}
+        shift={shiftModal.shift || gate.shift}
+        branchName={activeBranch?.name}
+        submitting={shiftSubmitting}
+        onClose={() =>
+          setShiftModal({ open: false, mode: 'open', shiftId: null, shift: null })
+        }
+        onOpenShift={handleOpenShift}
+        onCloseShift={handleCloseShift}
+        formatCurrency={formatCurrency}
+        c={c}
+        styles={styles}
+      />
     </SafeAreaView>
   );
 }
 
-/* ── styles ─────────────────────────────────────────────────── */
 
-function useStyles(c) {
-  return StyleSheet.create({
+const makeStyles = (c) =>
+  StyleSheet.create({
     safe: { flex: 1, backgroundColor: c.background },
 
-    /* gate / centered states */
     center: {
       flex: 1,
       alignItems: 'center',
       justifyContent: 'center',
       gap: 10,
-      padding: 24,
+      padding: spacing.xl,
       backgroundColor: c.background,
     },
     centerTitle: {
@@ -420,155 +740,289 @@ function useStyles(c) {
       backgroundColor: c.primary,
       paddingHorizontal: 22,
       paddingVertical: 12,
-      borderRadius: 12,
+      borderRadius: radius.md,
     },
     centerBtnText: { color: c.textOnPrimary, fontWeight: '800' },
     centerLink: { marginTop: 6 },
     centerLinkText: { color: c.link, fontWeight: '700' },
 
-    /* header */
     header: {
       flexDirection: 'row',
-      alignItems: 'center',
-      gap: 6,
+      alignItems: 'flex-start',
+      gap: 8,
       paddingHorizontal: spacing.md,
-      paddingVertical: spacing.sm,
+      paddingTop: spacing.sm,
+      paddingBottom: spacing.xs,
     },
-    syncDot: { width: 10, height: 10, borderRadius: 5, marginRight: 4 },
-    headerIcon: {
-      width: 44,
-      height: 44,
-      borderRadius: 12,
+    shiftSub: {
+      color: c.textSecondary,
+      fontSize: 13,
+      lineHeight: 19,
+      marginTop: 4,
+      marginBottom: 6,
+    },
+    brandWrap: {
+      flex: 1,
+      minWidth: 0,
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 12,
+      paddingTop: 4,
+    },
+    markWrap: { justifyContent: 'center' },
+    logoTile: {
+      width: 48,
+      height: 48,
+      borderRadius: radius.md,
+      backgroundColor: c.surface,
+      borderWidth: 1,
+      borderColor: c.border,
       alignItems: 'center',
       justifyContent: 'center',
     },
-    headerBadge: {
-      position: 'absolute',
-      top: 2,
-      right: 2,
-      minWidth: 18,
-      height: 18,
-      borderRadius: 9,
-      paddingHorizontal: 4,
-      backgroundColor: c.danger,
-      alignItems: 'center',
-      justifyContent: 'center',
-    },
-    headerBadgeText: { color: '#fff', fontSize: 11, fontWeight: '900' },
-    cartPill: {
+    logo: { width: 32, height: 32 },
+    brandDivider: { width: 1, height: 28, backgroundColor: c.border },
+    statusRow: {
       flexDirection: 'row',
       alignItems: 'center',
       gap: 6,
-      height: 44,
-      paddingHorizontal: 14,
-      borderRadius: 22,
+      flexShrink: 1,
+    },
+    statusDot: { width: 10, height: 10, borderRadius: 5 },
+    statusText: { fontSize: 14, fontWeight: '700', flexShrink: 1 },
+    headerActions: { flexDirection: 'row', alignItems: 'flex-start', gap: 8 },
+    actionWrap: { alignItems: 'center', minWidth: 48 },
+    actionBtn: {
+      width: 48,
+      height: 48,
+      borderRadius: radius.md,
+      backgroundColor: c.surface,
+      borderWidth: 1,
+      borderColor: c.border,
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+    actionBadge: {
+      position: 'absolute',
+      top: -6,
+      right: -6,
+      minWidth: 20,
+      height: 20,
+      borderRadius: 10,
+      paddingHorizontal: 5,
       backgroundColor: c.primary,
+      alignItems: 'center',
+      justifyContent: 'center',
     },
-    cartPillText: {
+    actionBadgeText: {
       color: c.textOnPrimary,
-      fontSize: 15,
+      fontSize: 11,
       fontWeight: '900',
-      fontVariant: ['tabular-nums'],
     },
-    iconBtnDisabled: { opacity: 0.45 },
+    actionLabel: {
+      color: c.textPrimary,
+      fontSize: 11,
+      fontWeight: '700',
+      marginTop: 4,
+    },
 
-    /* search */
     searchRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 8,
       paddingHorizontal: spacing.md,
       paddingBottom: spacing.sm,
     },
     searchBox: {
+      flex: 1,
+      height: 50,
       flexDirection: 'row',
       alignItems: 'center',
-      gap: 8,
+      gap: 10,
       backgroundColor: c.surface,
       borderWidth: 1,
       borderColor: c.border,
-      borderRadius: 12,
-      paddingHorizontal: 12,
-      paddingVertical: 10,
+      borderRadius: radius.md,
+      paddingHorizontal: 14,
     },
-    searchInput: { flex: 1, color: c.textPrimary, fontSize: 16, padding: 0 },
+    searchInput: {
+      flex: 1,
+      color: c.textPrimary,
+      fontSize: 15,
+      padding: 0,
+    },
 
-    /* category chips */
     chipsWrap: { paddingBottom: 8 },
     catChip: {
-      paddingHorizontal: 16,
-      height: 38,
-      borderRadius: 19,
+      flexDirection: 'row',
       alignItems: 'center',
-      justifyContent: 'center',
+      gap: 6,
+      paddingHorizontal: 12,
+      height: 38,
+      borderRadius: radius.md,
       backgroundColor: c.surface,
       borderWidth: 1,
       borderColor: c.border,
     },
-    catChipActive: { backgroundColor: c.primary, borderColor: c.primary },
-    catChipText: { color: c.textPrimary, fontSize: 14, fontWeight: '800' },
-    catChipTextActive: { color: c.textOnPrimary },
+    catChipActive: { borderColor: c.primary, borderWidth: 1.5 },
+    catChipText: { color: c.textPrimary, fontSize: 13, fontWeight: '700' },
+    catChipTextActive: { color: c.primary },
 
-    /* grid */
     gridContent: {
       paddingHorizontal: spacing.md,
       paddingTop: spacing.xs,
       paddingBottom: 12,
       flexGrow: 1,
     },
-    gridRow: { gap: 8, marginBottom: 8 },
+    gridCenter: {
+      flexGrow: 1,
+      alignItems: 'center',
+      justifyContent: 'center',
+      paddingVertical: 60,
+    },
+    gridRowWrap: {
+      flexDirection: 'row',
+      flexWrap: 'wrap',
+      gap: 8,
+      marginBottom: 16,
+    },
+    sectionHeader: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 6,
+      marginBottom: 10,
+      marginTop: 8,
+    },
+    sectionTitle: {
+      color: c.textSecondary,
+      fontSize: 12,
+      fontWeight: '800',
+      textTransform: 'uppercase',
+      letterSpacing: 0.5,
+    },
+
     tile: {
-      flex: 1,
+      width: '31.5%',
+      aspectRatio: 0.85,
       backgroundColor: c.surface,
       borderWidth: 1,
       borderColor: c.border,
-      borderRadius: 14,
+      borderRadius: radius.lg,
       padding: 10,
-      minHeight: 92,
+      overflow: 'hidden',
       justifyContent: 'space-between',
     },
-    tileActive: { borderColor: c.primary, borderWidth: 2 },
-    tilePressed: { opacity: 0.8, transform: [{ scale: 0.97 }] },
-    tileDisabled: { opacity: 0.5 },
+    tileSkeleton: {
+      backgroundColor: c.surfaceElevated,
+      borderColor: c.border,
+    },
+    skName: {
+      height: 13,
+      borderRadius: 4,
+      backgroundColor: c.border,
+      width: '80%',
+      marginTop: 6,
+    },
+    skNameShort: {
+      height: 13,
+      borderRadius: 4,
+      backgroundColor: c.border,
+      width: '55%',
+      marginTop: 6,
+    },
+    skPrice: {
+      height: 14,
+      borderRadius: 4,
+      backgroundColor: c.border,
+      width: '60%',
+    },
+    skStock: {
+      height: 10,
+      borderRadius: 3,
+      backgroundColor: c.border,
+      width: '45%',
+    },
+    tileActive: {
+      borderColor: c.primary,
+      borderWidth: 2,
+      backgroundColor: c.primarySoft,
+    },
+    tilePressed: { opacity: 0.85, transform: [{ scale: 0.98 }] },
+    tileDisabled: { opacity: 0.5, backgroundColor: c.background },
+
+    tileQty: {
+      position: 'absolute',
+      top: -6,
+      right: -6,
+      minWidth: 22,
+      height: 22,
+      borderRadius: 11,
+      backgroundColor: c.primary,
+      alignItems: 'center',
+      justifyContent: 'center',
+      zIndex: 1,
+      borderWidth: 2,
+      borderColor: c.surface,
+    },
+    tileQtyText: { color: c.textOnPrimary, fontSize: 11, fontWeight: '900' },
+
+    lowStockBadge: {
+      position: 'absolute',
+      top: 6,
+      right: 6,
+      backgroundColor: c.dangerSoft,
+      paddingHorizontal: 6,
+      paddingVertical: 2,
+      borderRadius: radius.sm,
+    },
+    lowStockText: { color: c.danger, fontSize: 9, fontWeight: '900' },
+
     tileName: {
       color: c.textPrimary,
-      fontSize: 14,
-      fontWeight: '800',
-      lineHeight: 17,
-      paddingRight: 14,
+      fontSize: 13,
+      fontWeight: '700',
+      lineHeight: 16,
+      marginTop: 6,
     },
-    tileNameDisabled: { color: c.textMuted },
+    tileNameDisabled: {
+      color: c.textMuted,
+      textDecorationLine: 'line-through',
+    },
+
     tileBottom: {
       flexDirection: 'row',
-      alignItems: 'center',
+      alignItems: 'flex-end',
       justifyContent: 'space-between',
-      gap: 6,
-      marginTop: 6,
+      marginTop: 8,
     },
     tilePrice: {
       flexShrink: 1,
       color: c.textPrimary,
-      fontSize: 15,
+      fontSize: 14,
       fontWeight: '900',
       fontVariant: ['tabular-nums'],
     },
-    tilePriceDisabled: { color: c.textMuted },
-    tileQty: {
-      position: 'absolute',
-      top: -8,
-      right: -6,
-      minWidth: 24,
-      height: 24,
-      borderRadius: 12,
-      paddingHorizontal: 6,
-      backgroundColor: c.primary,
-      alignItems: 'center',
-      justifyContent: 'center',
-      zIndex: 2,
+    tilePriceDisabled: { color: c.textMuted, fontSize: 12 },
+
+    tileStock: {
+      color: c.textMuted,
+      fontSize: 10,
+      fontWeight: '600',
+      marginTop: 2,
     },
-    tileQtyText: { color: c.textOnPrimary, fontSize: 13, fontWeight: '900' },
-    lowDot: {
-      width: 8,
-      height: 8,
-      borderRadius: 4,
-      backgroundColor: '#F59E0B',
+    tileStockLow: { color: c.danger, fontWeight: '800' },
+
+    unitBadge: {
+      backgroundColor: c.surfaceElevated,
+      paddingHorizontal: 4,
+      paddingVertical: 2,
+      borderRadius: radius.sm,
+    },
+    unitBadgeText: {
+      color: c.textMuted,
+      fontSize: 9,
+      fontWeight: '800',
+      textTransform: 'uppercase',
     },
 
     errorBox: {
@@ -578,7 +1032,7 @@ function useStyles(c) {
       paddingVertical: 10,
       paddingHorizontal: 12,
       marginTop: 8,
-      borderRadius: 10,
+      borderRadius: radius.md,
       backgroundColor: c.dangerSoft,
     },
     errorText: { flex: 1, color: c.danger, fontSize: 12, fontWeight: '600' },
@@ -599,17 +1053,46 @@ function useStyles(c) {
       color: c.textMuted,
       fontSize: 13,
       textAlign: 'center',
-      paddingVertical: 20,
     },
 
-    /* footer */
-    footer: {
-      paddingHorizontal: spacing.md,
-      paddingTop: spacing.sm,
-      gap: 10,
+    snackbar: {
+      position: 'absolute',
+      left: spacing.md,
+      right: spacing.md,
+      bottom: spacing.md,
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 8,
+      paddingHorizontal: 14,
+      paddingVertical: 12,
+      borderRadius: radius.md,
+      backgroundColor: c.surface,
+      borderWidth: 1,
+      borderColor: c.border,
+      shadowColor: '#000',
+      shadowOpacity: 0.12,
+      shadowRadius: 12,
+      shadowOffset: { width: 0, height: 6 },
+      elevation: 6,
+    },
+    snackText: {
+      flex: 1,
+      color: c.textPrimary,
+      fontSize: 13,
+      fontWeight: '700',
+    },
+    snackAction: { color: c.link, fontSize: 13, fontWeight: '900' },
+
+    footerWrapper: {
+      backgroundColor: c.surface,
       borderTopWidth: StyleSheet.hairlineWidth,
       borderTopColor: c.border,
+    },
+    footer: {
+      paddingHorizontal: spacing.md,
+      paddingTop: spacing.md,
       backgroundColor: c.surface,
+      gap: 12,
     },
     footerTop: {
       flexDirection: 'row',
@@ -618,80 +1101,45 @@ function useStyles(c) {
     },
     footerKicker: {
       color: c.textMuted,
-      fontSize: 12,
+      fontSize: 15,
       fontWeight: '700',
-      letterSpacing: 0.3,
     },
     footerTotal: {
       color: c.textPrimary,
-      fontSize: 26,
+      fontSize: 30,
       fontWeight: '900',
       fontVariant: ['tabular-nums'],
     },
-    undoBtn: {
-      flexDirection: 'row',
-      alignItems: 'center',
-      gap: 6,
-      height: 44,
-      paddingHorizontal: 16,
-      borderRadius: 12,
-      borderWidth: 1,
-      borderColor: c.border,
-      backgroundColor: c.background,
-    },
-    undoText: { color: c.textPrimary, fontSize: 14, fontWeight: '800' },
-    payRow: { flexDirection: 'row', gap: 10 },
+    payRow: { flexDirection: 'row', gap: 8 },
     payBtn: {
       flex: 1,
-      height: 58,
+      height: 60,
       flexDirection: 'row',
       alignItems: 'center',
       justifyContent: 'center',
-      gap: 8,
-      backgroundColor: c.primary,
-      borderRadius: 16,
-    },
-    payBtnMpesa: { backgroundColor: '#16A34A' },
-    payBtnDisabled: { opacity: 0.4 },
-    payBtnText: { color: '#fff', fontWeight: '900', fontSize: 17 },
-
-    /* snackbar */
-    snackbar: {
-      position: 'absolute',
-      left: spacing.md,
-      right: spacing.md,
-      bottom: 10,
-      flexDirection: 'row',
-      alignItems: 'center',
       gap: 10,
-      paddingHorizontal: 14,
-      paddingVertical: 14,
-      borderRadius: 14,
-      backgroundColor: c.surfaceElevated,
+      backgroundColor: c.primary,
+      borderRadius: 18,
+    },
+    payBtnMpesa: { backgroundColor: MPESA_GREEN },
+    payBtnDisabled: { opacity: 0.5 },
+    payBtnText: {
+      color: c.textOnPrimary,
+      fontWeight: '900',
+      fontSize: 19,
+    },
+    payOther: {
+      flex: 1,
+      minWidth: 44,
+      height: 68,
+      alignItems: 'center',
+      justifyContent: 'center',
+      borderRadius: 18,
+      backgroundColor: c.surface,
       borderWidth: 1,
       borderColor: c.border,
     },
-    snackText: { flex: 1, color: c.textPrimary, fontSize: 14, fontWeight: '800' },
-    snackAction: { color: c.link, fontSize: 14, fontWeight: '900' },
 
-    /* list rows reused inside modals */
-    resultRow: {
-      flexDirection: 'row',
-      alignItems: 'center',
-      gap: 10,
-      paddingVertical: 14,
-      borderBottomWidth: StyleSheet.hairlineWidth,
-      borderBottomColor: c.border,
-    },
-    resultName: { color: c.textPrimary, fontSize: 15, fontWeight: '700' },
-    resultMeta: {
-      color: c.textMuted,
-      fontSize: 12,
-      fontWeight: '600',
-      marginTop: 2,
-    },
-
-    /* sheets — shared across all modals */
     sheetBackdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.35)' },
     sheet: {
       backgroundColor: c.background,
@@ -709,10 +1157,14 @@ function useStyles(c) {
       backgroundColor: c.border,
       marginBottom: 8,
     },
-    sheetTitle: { color: c.textPrimary, fontSize: 18, fontWeight: '900' },
+    sheetTitle: {
+      color: c.textPrimary,
+      fontSize: 18,
+      fontWeight: '900',
+    },
     sheetTotal: {
       color: c.textPrimary,
-      fontSize: 36,
+      fontSize: 30,
       fontWeight: '900',
       letterSpacing: -1,
       fontVariant: ['tabular-nums'],
@@ -729,49 +1181,57 @@ function useStyles(c) {
       backgroundColor: c.surface,
       borderWidth: 1,
       borderColor: c.border,
-      borderRadius: 12,
+      borderRadius: radius.md,
       paddingHorizontal: 12,
-      paddingVertical: 12,
+      paddingVertical: 10,
       color: c.textPrimary,
-      fontSize: 16,
+      fontSize: 15,
     },
     methodGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
     methodChip: {
       flexDirection: 'row',
       alignItems: 'center',
       gap: 6,
-      paddingHorizontal: 14,
-      paddingVertical: 12,
-      borderRadius: 12,
+      paddingHorizontal: 12,
+      paddingVertical: 10,
+      borderRadius: radius.md,
       borderWidth: 1,
       borderColor: c.border,
       backgroundColor: c.surface,
     },
-    methodChipActive: { backgroundColor: c.primary, borderColor: c.primary },
+    methodChipActive: {
+      backgroundColor: c.primary,
+      borderColor: c.primary,
+    },
     methodChipDisabled: { opacity: 0.4 },
-    methodText: { color: c.textPrimary, fontSize: 14, fontWeight: '800' },
+    methodText: { color: c.textPrimary, fontSize: 13, fontWeight: '800' },
     methodTextActive: { color: c.textOnPrimary },
     methodTextDisabled: { color: c.textMuted },
     quickChip: {
-      minWidth: 70,
-      height: 48,
-      paddingHorizontal: 14,
-      borderRadius: 12,
-      alignItems: 'center',
-      justifyContent: 'center',
-      backgroundColor: c.primarySoft,
+      paddingHorizontal: 12,
+      paddingVertical: 8,
+      borderRadius: 999,
+      backgroundColor: c.surface,
+      borderWidth: 1,
+      borderColor: c.border,
     },
-    quickChipText: { color: c.link, fontSize: 16, fontWeight: '900' },
+    quickChipText: { color: c.textPrimary, fontSize: 12, fontWeight: '800' },
     changeRow: {
       flexDirection: 'row',
-      justifyContent: 'space-between',
       alignItems: 'center',
-      paddingVertical: 8,
+      justifyContent: 'space-between',
+      marginTop: 8,
+      paddingHorizontal: 4,
     },
-    changeLabel: { color: c.textMuted, fontSize: 14, fontWeight: '700' },
+    changeLabel: {
+      color: c.textMuted,
+      fontSize: 13,
+      fontWeight: '700',
+      letterSpacing: 0.3,
+    },
     changeValue: {
-      color: c.success,
-      fontSize: 26,
+      color: c.primary,
+      fontSize: 20,
       fontWeight: '900',
       fontVariant: ['tabular-nums'],
     },
@@ -782,18 +1242,18 @@ function useStyles(c) {
       gap: 8,
       marginTop: 14,
       backgroundColor: c.primary,
-      paddingVertical: 16,
-      borderRadius: 14,
+      paddingVertical: 14,
+      borderRadius: radius.md,
     },
-    confirmText: { color: '#fff', fontSize: 16, fontWeight: '900' },
+    confirmText: { color: c.textOnPrimary, fontSize: 15, fontWeight: '900' },
     secondaryBtn: {
       flexDirection: 'row',
       alignItems: 'center',
       justifyContent: 'center',
       gap: 6,
       marginTop: 8,
-      paddingVertical: 14,
-      borderRadius: 12,
+      paddingVertical: 12,
+      borderRadius: radius.md,
       borderWidth: 1,
       borderColor: c.border,
       backgroundColor: c.surface,
@@ -807,55 +1267,23 @@ function useStyles(c) {
       marginTop: 4,
     },
     walkinText: { color: c.link, fontSize: 14, fontWeight: '800' },
-    rowBetween: {
-      flexDirection: 'row',
-      alignItems: 'center',
-      justifyContent: 'space-between',
-    },
-    rowGap: { flexDirection: 'row', gap: 10 },
 
-    /* cart sheet */
-    cartTotal: {
-      color: c.textPrimary,
-      fontSize: 20,
-      fontWeight: '900',
-      fontVariant: ['tabular-nums'],
-    },
-    cartRow: {
+    resultRow: {
       flexDirection: 'row',
       alignItems: 'center',
-      gap: 8,
-      paddingVertical: 10,
+      gap: 10,
+      paddingVertical: 12,
       borderBottomWidth: StyleSheet.hairlineWidth,
       borderBottomColor: c.border,
     },
-    cartRowName: { color: c.textPrimary, fontSize: 15, fontWeight: '800' },
-    cartRowMeta: { color: c.textMuted, fontSize: 12, marginTop: 2 },
-    cartRowTotal: {
-      minWidth: 70,
-      textAlign: 'right',
-      color: c.textPrimary,
-      fontSize: 14,
-      fontWeight: '900',
-      fontVariant: ['tabular-nums'],
-    },
-    qtyBtn: {
-      width: 38,
-      height: 38,
-      borderRadius: 19,
-      alignItems: 'center',
-      justifyContent: 'center',
-      backgroundColor: c.surfaceElevated,
-    },
-    qtyText: {
-      minWidth: 22,
-      textAlign: 'center',
-      color: c.textPrimary,
-      fontSize: 16,
-      fontWeight: '900',
+    resultName: { color: c.textPrimary, fontSize: 15, fontWeight: '700' },
+    resultMeta: {
+      color: c.textMuted,
+      fontSize: 12,
+      fontWeight: '600',
+      marginTop: 2,
     },
 
-    /* variant picker */
     variantSub: {
       color: c.textMuted,
       fontSize: 12,
@@ -867,7 +1295,7 @@ function useStyles(c) {
       flexDirection: 'row',
       alignItems: 'center',
       gap: 10,
-      paddingVertical: 14,
+      paddingVertical: 12,
       paddingHorizontal: 4,
       borderBottomWidth: StyleSheet.hairlineWidth,
       borderBottomColor: c.border,
@@ -889,7 +1317,61 @@ function useStyles(c) {
       marginRight: 4,
     },
 
-    /* receipt */
+    rowBetween: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+    },
+    rowGap: { flexDirection: 'row', gap: 8 },
+    cartTotal: {
+      color: c.textPrimary,
+      fontSize: 18,
+      fontWeight: '900',
+      fontVariant: ['tabular-nums'],
+    },
+    cartRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 8,
+      paddingVertical: 10,
+      borderBottomWidth: StyleSheet.hairlineWidth,
+      borderBottomColor: c.border,
+    },
+    cartRowName: {
+      color: c.textPrimary,
+      fontSize: 14,
+      fontWeight: '700',
+    },
+    cartRowMeta: {
+      color: c.textMuted,
+      fontSize: 11,
+      fontWeight: '600',
+      marginTop: 2,
+    },
+    cartRowTotal: {
+      minWidth: 70,
+      textAlign: 'right',
+      color: c.textPrimary,
+      fontWeight: '900',
+      fontSize: 13,
+      fontVariant: ['tabular-nums'],
+    },
+    qtyBtn: {
+      width: 30,
+      height: 30,
+      borderRadius: 15,
+      alignItems: 'center',
+      justifyContent: 'center',
+      backgroundColor: c.surfaceElevated,
+    },
+    qtyText: {
+      minWidth: 22,
+      textAlign: 'center',
+      color: c.textPrimary,
+      fontWeight: '900',
+      fontVariant: ['tabular-nums'],
+    },
+
     receiptHeader: {
       color: c.textPrimary,
       fontSize: 16,
@@ -920,7 +1402,11 @@ function useStyles(c) {
       fontWeight: '700',
       fontVariant: ['tabular-nums'],
     },
-    receiptTotalLabel: { color: c.textPrimary, fontSize: 15, fontWeight: '900' },
+    receiptTotalLabel: {
+      color: c.textPrimary,
+      fontSize: 15,
+      fontWeight: '900',
+    },
     receiptTotalValue: {
       color: c.textPrimary,
       fontSize: 15,
@@ -933,5 +1419,10 @@ function useStyles(c) {
       textAlign: 'center',
       marginTop: 8,
     },
+    brandName: {
+      color: c.textPrimary,
+      fontSize: 15,
+      fontWeight: '900',
+      letterSpacing: -0.3,
+    },
   });
-}

@@ -8,6 +8,8 @@ import { Alert } from 'react-native';
 import * as inventoryService from '../../services/inventory.service';
 import * as salesService from '../../services/sales.service';
 import * as shiftService from '../../services/shift.service';
+import * as catalogue from '../../offline/catalogue';
+import * as outbox from '../../offline/outbox';
 
 /* ── utils ──────────────────────────────────────────────────── */
 
@@ -59,98 +61,173 @@ export function normalizeProduct(p) {
 
 /* ── usePosGate ─────────────────────────────────────────────── */
 
-export function usePosGate({ orgId, branchId }) {
+export function usePosGate({ orgId, branchId, contextReady = false }) {
   const [gate, setGate] = useState({
     status: 'loading',
     shift: null,
     error: null,
+    blockedShift: null,
   });
 
   const run = useCallback(async () => {
     if (!orgId || !branchId) {
-      setGate({ status: 'error', shift: null, error: 'Missing branch context' });
+      // Context not settled yet → keep waiting.
+      if (!contextReady) {
+        setGate({
+          status: 'loading',
+          shift: null,
+          error: null,
+          blockedShift: null,
+        });
+        return;
+      }
+      // Context settled and still no branch → terminal, actionable state.
+      setGate({
+        status: 'no-branch',
+        shift: null,
+        error: 'No branch selected for this organization.',
+        blockedShift: null,
+      });
       return;
     }
-    setGate({ status: 'loading', shift: null, error: null });
+    setGate({
+      status: 'loading',
+      shift: null,
+      error: null,
+      blockedShift: null,
+    });
     try {
       const setting = await shiftService.getBranchShiftSetting(orgId, branchId);
       if (setting?.shiftsEnabled !== true) {
-        setGate({ status: 'ready', shift: null, error: null });
+        setGate({
+          status: 'ready',
+          shift: null,
+          error: null,
+          blockedShift: null,
+        });
         return;
       }
       const current = await shiftService.getCurrentShift(orgId);
       if (current && current.branchId === branchId) {
-        setGate({ status: 'ready', shift: current, error: null });
+        setGate({
+          status: 'ready',
+          shift: current,
+          error: null,
+          blockedShift: null,
+        });
         return;
       }
       if (current && current.branchId !== branchId) {
         setGate({
           status: 'blocked',
-          shift: current,
+          shift: null,
           error: `You have an open shift at ${
             current.branch?.name || 'another branch'
           }. Close it first.`,
+          blockedShift: current,
         });
         return;
       }
-      setGate({ status: 'no-shift', shift: null, error: null });
+      setGate({
+        status: 'no-shift',
+        shift: null,
+        error: null,
+        blockedShift: null,
+      });
     } catch (e) {
       setGate({
         status: 'error',
         shift: null,
         error: e?.response?.data?.error || e?.message || 'Could not load POS',
+        blockedShift: null,
       });
     }
-  }, [orgId, branchId]);
+  }, [orgId, branchId, contextReady]);
 
   useEffect(() => {
     run();
   }, [run]);
 
-  const openShift = useCallback(async () => {
-    if (!orgId || !branchId) return;
-    try {
-      const shift = await shiftService.openShift(orgId, {
-        branchId,
-        openingFloat: 0,
-      });
-      setGate({ status: 'ready', shift, error: null });
-    } catch (e) {
-      const msg =
-        e?.response?.data?.error || e?.message || 'Failed to open shift';
-      if (/shifts are not enabled/i.test(msg)) {
-        setGate({ status: 'ready', shift: null, error: null });
-      } else {
-        Alert.alert('Shift', msg);
+  // Open a shift with an explicit opening float.
+  // Returns the shift on success, null if the branch doesn't use shifts,
+  // throws on real errors (the caller surfaces them).
+  const openShift = useCallback(
+    async (openingFloat = 0) => {
+      if (!orgId || !branchId) return null;
+      try {
+        const shift = await shiftService.openShift(orgId, {
+          branchId,
+          openingFloat: Number(openingFloat) || 0,
+        });
+        setGate({
+          status: 'ready',
+          shift,
+          error: null,
+          blockedShift: null,
+        });
+        return shift;
+      } catch (e) {
+        const msg =
+          e?.response?.data?.error || e?.message || 'Failed to open shift';
+        if (/shifts are not enabled/i.test(msg)) {
+          setGate({
+            status: 'ready',
+            shift: null,
+            error: null,
+            blockedShift: null,
+          });
+          return null;
+        }
+        throw e;
       }
-    }
-  }, [orgId, branchId]);
+    },
+    [orgId, branchId]
+  );
 
-  return { gate, runGate: run, openShift };
+  // Close a shift by id with declared cash. Re-runs the gate on success
+  // so the screen transitions to its next state (no-shift, ready, etc.).
+  const closeShift = useCallback(
+    async (shiftId, declaredCash) => {
+      if (!orgId || !shiftId) return null;
+      const closed = await shiftService.closeShift(orgId, shiftId, {
+        declaredCash: Number(declaredCash) || 0,
+      });
+      await run();
+      return closed;
+    },
+    [orgId, run]
+  );
+
+  return { gate, runGate: run, openShift, closeShift };
 }
+
+/* ── usePosProducts ─────────────────────────────────────────── */
 
 /* ── usePosProducts ─────────────────────────────────────────── */
 
 export function usePosProducts({ orgId, branchId, enabled }) {
   const [query, setQuery] = useState('');
   const [products, setProducts] = useState([]);
-  const [searching, setSearching] = useState(false);
+  const [searching, setSearching] = useState(true);
+  const [loadedOnce, setLoadedOnce] = useState(false);
   const [error, setError] = useState(null);
   const tokenRef = useRef(0);
+  const queryRef = useRef('');
+  queryRef.current = query;
 
   const load = useCallback(
     async (q) => {
       if (!orgId || !branchId) return;
       const myToken = ++tokenRef.current;
-      setSearching(true);
       setError(null);
       try {
-        const res = await inventoryService.getBranchProducts(orgId, branchId, {
-          search: q ? q.trim() : undefined,
-          limit: 30,
-        });
+        if (!(await catalogue.hasCatalogue(branchId))) {
+          setSearching(true);
+          await catalogue.syncCatalogue(orgId, branchId, normalizeProduct);
+        }
+        const items = await catalogue.searchLocal(branchId, q, 60);
         if (myToken !== tokenRef.current) return;
-        setProducts((res?.items || []).map(normalizeProduct));
+        setProducts(items);
       } catch (e) {
         if (myToken !== tokenRef.current) return;
         setProducts([]);
@@ -158,29 +235,62 @@ export function usePosProducts({ orgId, branchId, enabled }) {
           e?.response?.data?.error || e?.message || 'Could not load products'
         );
       } finally {
-        if (myToken === tokenRef.current) setSearching(false);
+        if (myToken === tokenRef.current) {
+          setSearching(false);
+          setLoadedOnce(true);
+        }
       }
     },
     [orgId, branchId]
   );
 
+  // initial load
   useEffect(() => {
     if (enabled) load('');
   }, [enabled, load]);
 
+  // search (local, so no debounce delay needed)
   useEffect(() => {
     if (!enabled) return undefined;
-    const t = setTimeout(() => load(query), 220);
+    const t = setTimeout(() => load(query), 60);
     return () => clearTimeout(t);
   }, [query, enabled, load]);
 
-  const reload = useCallback(() => load(query), [load, query]);
+  // background refresh from server
+  useEffect(() => {
+    if (!enabled || !orgId || !branchId) return undefined;
+    let alive = true;
+    const run = async () => {
+      try {
+        await catalogue.syncCatalogue(orgId, branchId, normalizeProduct);
+        if (alive) load(queryRef.current);
+      } catch {}
+    };
+    run();
+    const t = setInterval(run, 5 * 60 * 1000);
+    return () => {
+      alive = false;
+      clearInterval(t);
+    };
+  }, [enabled, orgId, branchId, load]);
+
+  // When enabled flips false, mark as not-loaded so the next enable shows
+  // the skeleton again (branch change, org switch, etc.).
+  useEffect(() => {
+    if (!enabled) {
+      setSearching(true);
+      setLoadedOnce(false);
+    }
+  }, [enabled]);
+
+  const reload = useCallback(() => load(queryRef.current), [load]);
 
   return {
     query,
     setQuery,
     products,
     searching,
+    loadedOnce,
     error,
     reload,
   };
@@ -354,12 +464,13 @@ export function usePosSale({
       }
       setSubmitting(true);
       try {
+        const clientSaleId = clientSaleIdRef.current;
         const payload = {
           branchId,
           shiftId: gate.shift?.id ?? null,
           customerId: customer?.id ?? null,
           customerName: customer?.name ?? 'Walk-in',
-          clientSaleId: clientSaleIdRef.current,
+          clientSaleId,
           items: cart.map((l) => ({
             productId: l.productId,
             unitId: l.unitId,
@@ -373,11 +484,25 @@ export function usePosSale({
             },
           ],
         };
+
+        // Cash: journal locally, show done now, push in the background.
+        if (method === 'CASH') {
+          const lines = cart.map((l) => ({
+            productId: l.productId,
+            qty: l.quantity,
+            baseQty: l.quantity * (l.conversionQty || 1),
+          }));
+          await outbox.enqueueSale({ orgId, branchId, payload, lines });
+          clearCart();
+          return { id: null, clientSaleId, queued: true };
+        }
+
+        // Everything else: network-first (safe to retry, server dedupes on clientSaleId).
         const sale = await withRetry(() =>
           salesService.createSale(orgId, payload)
         );
         clearCart();
-        return sale;
+        return { ...sale, clientSaleId };
       } finally {
         setSubmitting(false);
       }
@@ -434,4 +559,85 @@ export function usePosReceipt({ orgId }) {
   }, []);
 
   return { open, receipt, loading, show, close };
+}
+
+/* ── usePosQuickPicks ────────────────────────────────────────── */
+
+const QUICK_RELOAD_MIN_MS = 30 * 1000; // refresh at most every 30s
+
+export function usePosQuickPicks({ orgId, branchId, enabled }) {
+  const [favorites, setFavorites] = useState([]);
+  const [recent, setRecent] = useState([]);
+  const [top, setTop] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const lastReloadRef = useRef(0);
+  const loadingRef = useRef(false);
+
+  const load = useCallback(async () => {
+    if (!orgId || !branchId) return;
+    if (loadingRef.current) return;
+    loadingRef.current = true;
+    setLoading(true);
+    try {
+      const [fav, rec, tp] = await Promise.all([
+        inventoryService.getFavoriteProducts(orgId, branchId).catch(() => []),
+        inventoryService.getRecentProducts(orgId, branchId, { limit: 10 }).catch(() => []),
+        inventoryService.getTopProducts(orgId, branchId, { limit: 10, days: 30 }).catch(() => []),
+      ]);
+      setFavorites(fav || []);
+      setRecent(rec || []);
+      setTop(tp || []);
+      lastReloadRef.current = Date.now();
+    } finally {
+      loadingRef.current = false;
+      setLoading(false);
+    }
+  }, [orgId, branchId]);
+
+  // Recent only — cheaper than a full refresh for post-sale.
+  const loadRecentOnly = useCallback(async () => {
+    if (!orgId || !branchId) return;
+    try {
+      const rec = await inventoryService
+        .getRecentProducts(orgId, branchId, { limit: 10 })
+        .catch(() => null);
+      if (rec) setRecent(rec);
+      lastReloadRef.current = Date.now();
+    } catch {}
+  }, [orgId, branchId]);
+
+  useEffect(() => {
+    if (enabled) load();
+  }, [enabled, load]);
+
+  // Throttled reload. Called after each sale. Refreshes Recent only,
+  // and only if ≥30s since the last refresh. Next sale past 30s will
+  // do the actual refresh.
+  const reload = useCallback(() => {
+    if (Date.now() - lastReloadRef.current < QUICK_RELOAD_MIN_MS) return;
+    loadRecentOnly();
+  }, [loadRecentOnly]);
+
+  const toggleFavorite = useCallback(
+    async (productId) => {
+      if (!orgId || !branchId) return;
+      try {
+        await inventoryService.toggleFavoriteProduct(orgId, branchId, productId);
+        await load();
+      } catch {
+        // silent — favorites are a convenience, never block a sale
+      }
+    },
+    [orgId, branchId, load]
+  );
+
+  return {
+    favorites,
+    recent,
+    top,
+    loading,
+    reload,
+    reloadAll: load,
+    toggleFavorite,
+  };
 }

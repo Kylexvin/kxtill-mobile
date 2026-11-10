@@ -1,8 +1,11 @@
 // src/navigation/MainTabNavigator.jsx
 
-import { View } from 'react-native';
+import { View, Alert } from 'react-native';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
-import { CommonActions } from '@react-navigation/native';
+import {
+  CommonActions,
+  getFocusedRouteNameFromRoute,
+} from '@react-navigation/native';
 import { ROUTES } from '../constants/routes';
 import DashboardScreen from '../screens/dashboard/DashboardScreen';
 import BranchesStack from './BranchesStack';
@@ -12,6 +15,9 @@ import CustomTabBar from './CustomTabBar';
 import { ActionsArcProvider, ActionsArcOverlay } from './ActionsArc';
 import { navigationRef } from './navigationRef';
 import { useOrganizationContext } from '../context/OrganizationContext';
+import { usePermissionsContext } from '../context/PermissionsContext';
+import { KXTILL } from '../constants/permissions';
+import { goToBusinessScreen } from './helpers';
 
 const Tab = createBottomTabNavigator();
 
@@ -19,68 +25,57 @@ function NullScreen() {
   return null;
 }
 
+// Routes inside BranchesStack that must hide the bottom tab bar.
+const HIDE_TAB_BAR_ROUTES = new Set([ROUTES.POS, ROUTES.BARCODE_SCANNER]);
+
 export default function MainTabNavigator() {
   const { activeBranch } = useOrganizationContext();
+  const { can } = usePermissionsContext();
 
   const handleArcAction = (item) => {
     if (!item) return;
 
     switch (item.id) {
-      case 'pos':
-        navigationRef.dispatch(
-          CommonActions.navigate({
-            name: ROUTES.TAB_BUSINESS,
-            params: {
-              screen: ROUTES.POS,
-              params: {
-                branchId: activeBranch?.id ?? null,
-                branchName: activeBranch?.name ?? null,
-              },
-            },
-          })
-        );
+      case 'pos': {
+        if (!can(KXTILL.SALES.CREATE)) {
+          Alert.alert(
+            'Not available',
+            'You do not have permission to use POS.'
+          );
+          break;
+        }
+        goToBusinessScreen(navigationRef.dispatch, ROUTES.POS, {
+          branchId: activeBranch?.id ?? null,
+          branchName: activeBranch?.name ?? null,
+        });
         break;
+      }
 
       case 'share-receipt':
-        navigationRef.dispatch(
-          CommonActions.navigate({
-            name: ROUTES.TAB_BUSINESS,
-            params: {
-              screen: ROUTES.BRANCH_SALES_LIST,
-              params: {
-                branchId: activeBranch?.id ?? null,
-                branchName: activeBranch?.name ?? null,
-              },
-            },
-          })
-        );
+        goToBusinessScreen(navigationRef.dispatch, ROUTES.BRANCH_SALES_LIST, {
+          branchId: activeBranch?.id ?? null,
+          branchName: activeBranch?.name ?? null,
+        });
         break;
 
       case 'team':
-        navigationRef.dispatch(
-          CommonActions.navigate({
-            name: ROUTES.TAB_BUSINESS,
-            params: { screen: ROUTES.BRANCH_TEAM },
-          })
-        );
+        goToBusinessScreen(navigationRef.dispatch, ROUTES.BRANCH_TEAM, {
+          branchId: activeBranch?.id ?? null,
+          branchName: activeBranch?.name ?? null,
+        });
         break;
 
       case 'add-product':
-        navigationRef.dispatch(
-          CommonActions.navigate({
-            name: ROUTES.TAB_BUSINESS,
-            params: { screen: ROUTES.PRODUCT_FORM, params: { mode: 'create' } },
-          })
-        );
+        goToBusinessScreen(navigationRef.dispatch, ROUTES.PRODUCT_FORM, {
+          mode: 'create',
+          branchId: activeBranch?.id ?? null,
+        });
         break;
 
       case 'barcode-tool':
-        navigationRef.dispatch(
-          CommonActions.navigate({
-            name: ROUTES.TAB_BUSINESS,
-            params: { screen: ROUTES.BARCODE_TOOLS },
-          })
-        );
+        goToBusinessScreen(navigationRef.dispatch, ROUTES.BARCODE_TOOLS, {
+          branchId: activeBranch?.id ?? null,
+        });
         break;
 
       default:
@@ -93,7 +88,20 @@ export default function MainTabNavigator() {
       <View style={{ flex: 1 }}>
         <Tab.Navigator
           screenOptions={{ headerShown: false }}
-          tabBar={(props) => <CustomTabBar {...props} />}
+          tabBar={(props) => {
+            const focusedTab = props.state.routes[props.state.index];
+            const nestedRoute =
+              getFocusedRouteNameFromRoute(focusedTab) ?? null;
+
+            if (
+              focusedTab.name === ROUTES.TAB_BUSINESS &&
+              HIDE_TAB_BAR_ROUTES.has(nestedRoute)
+            ) {
+              return null;
+            }
+
+            return <CustomTabBar {...props} />;
+          }}
         >
           <Tab.Screen name={ROUTES.TAB_HOME} component={DashboardScreen} />
           <Tab.Screen name={ROUTES.TAB_BUSINESS} component={BranchesStack} />

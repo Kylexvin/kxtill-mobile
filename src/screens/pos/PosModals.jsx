@@ -1,6 +1,11 @@
 // src/screens/pos/PosModals.jsx
 //
 // Modal components for the POS screen. Presentational only.
+//
+// NOTE: There is ALSO a PosPaymentModal in PosSheets.jsx. PosScreen
+// imports the one from PosSheets. The PosPaymentModal below is unused
+// in the current screen — kept commented out for reference only.
+// If you grep and confirm nothing else imports it, delete it entirely.
 
 import { useEffect, useState } from 'react';
 import {
@@ -13,11 +18,8 @@ import {
   Modal,
   ActivityIndicator,
   Alert,
-  KeyboardAvoidingView,
-  Platform,
 } from 'react-native';
 import Ionicons from '@react-native-vector-icons/ionicons';
-import { PAYMENT_METHODS, needsReference } from './usePos';
 
 /* ── Customer modal ─────────────────────────────────────────── */
 
@@ -123,119 +125,6 @@ export function PosCustomerModal({
           </Pressable>
         </View>
       </View>
-    </Modal>
-  );
-}
-
-/* ── Payment modal ──────────────────────────────────────────── */
-
-export function PosPaymentModal({
-  visible,
-  submitting,
-  subtotal,
-  customer,
-  method,
-  setMethod,
-  reference,
-  setReference,
-  onClose,
-  onConfirm,
-  formatCurrency,
-  c,
-  styles,
-}) {
-  const creditAllowed = !!customer;
-  return (
-    <Modal
-      visible={visible}
-      animationType="slide"
-      transparent
-      onRequestClose={() => !submitting && onClose()}
-    >
-      <KeyboardAvoidingView
-        style={styles.sheetBackdrop}
-        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-      >
-        <Pressable
-          style={{ flex: 1 }}
-          onPress={() => !submitting && onClose()}
-        />
-        <View style={styles.sheet}>
-          <View style={styles.sheetHandle} />
-          <Text style={styles.sheetTitle}>Take payment</Text>
-          <Text style={styles.sheetTotal}>{formatCurrency(subtotal)}</Text>
-
-          <Text style={styles.sheetKicker}>Method</Text>
-          <View style={styles.methodGrid}>
-            {PAYMENT_METHODS.map((m) => {
-              const disabled = m.key === 'CREDIT' && !creditAllowed;
-              const active = method === m.key;
-              return (
-                <Pressable
-                  key={m.key}
-                  disabled={disabled}
-                  onPress={() => setMethod(m.key)}
-                  style={[
-                    styles.methodChip,
-                    active && styles.methodChipActive,
-                    disabled && styles.methodChipDisabled,
-                  ]}
-                >
-                  <Ionicons
-                    name={m.icon}
-                    size={16}
-                    color={
-                      active
-                        ? c.textOnPrimary
-                        : disabled
-                        ? c.textMuted
-                        : c.textPrimary
-                    }
-                  />
-                  <Text
-                    style={[
-                      styles.methodText,
-                      active && styles.methodTextActive,
-                      disabled && styles.methodTextDisabled,
-                    ]}
-                  >
-                    {m.label}
-                  </Text>
-                </Pressable>
-              );
-            })}
-          </View>
-
-          {needsReference(method) ? (
-            <>
-              <Text style={styles.sheetKicker}>Reference</Text>
-              <TextInput
-                value={reference}
-                onChangeText={setReference}
-                placeholder={`${method} reference`}
-                placeholderTextColor={c.textMuted}
-                style={styles.sheetInput}
-                autoCapitalize="characters"
-              />
-            </>
-          ) : null}
-
-          <Pressable
-            onPress={onConfirm}
-            disabled={submitting}
-            style={[styles.confirmBtn, submitting && { opacity: 0.7 }]}
-          >
-            {submitting ? (
-              <ActivityIndicator color="#fff" />
-            ) : (
-              <>
-                <Text style={styles.confirmText}>Confirm sale</Text>
-                <Ionicons name="checkmark" size={18} color="#fff" />
-              </>
-            )}
-          </Pressable>
-        </View>
-      </KeyboardAvoidingView>
     </Modal>
   );
 }

@@ -25,6 +25,17 @@ export async function openShift(organizationId, payload) {
   return data?.shift || null;
 }
 
+// POST /shifts/:shiftId/close -> 200 { shift: {...} }
+// Payload: { declaredCash: number >= 0 }
+// Response includes expectedCash + variance computed server-side.
+export async function closeShift(organizationId, shiftId, payload) {
+  const { data } = await api.post(
+    `/api/v1/organizations/${organizationId}/kxtill/shifts/${shiftId}/close`,
+    payload
+  );
+  return data?.shift || null;
+}
+
 // GET /branches/:branchId/settings -> { setting: {...} }
 // Reads `shiftsEnabled` and `defaultPaymentMethod` (fallback chain
 // handled in the screen).
@@ -35,4 +46,9 @@ export async function getBranchShiftSetting(organizationId, branchId) {
   return data?.setting || data || null;
 }
 
-export default { getCurrentShift, openShift, getBranchShiftSetting };
+export default {
+  getCurrentShift,
+  openShift,
+  closeShift,
+  getBranchShiftSetting,
+};

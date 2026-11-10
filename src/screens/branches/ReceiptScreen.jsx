@@ -1,13 +1,6 @@
 // src/screens/branches/ReceiptScreen.jsx
 //
-// Image-share receipt. Requires react-native-view-shot + expo-sharing
-// (already in package.json and compiled into the current dev-client build).
-//
-// Actions:
-//   - Share receipt → capture PNG → native share sheet
-//   - WhatsApp      → capture PNG → native share sheet
-//   - SMS           → text only
-//   - Copy          → text via Share.share → user taps "Copy" in sheet
+// Image-share receipt. Also supports PDF export via expo-print.
 
 import {
   useCallback,
@@ -34,6 +27,7 @@ import {
 } from 'react-native-safe-area-context';
 import ViewShot from 'react-native-view-shot';
 import * as Sharing from 'expo-sharing';
+import * as Print from 'expo-print';
 import Ionicons from '@react-native-vector-icons/ionicons';
 import { useTheme } from '../../styles/ThemeProvider';
 import { spacing, radius } from '../../styles/spacing';
@@ -60,6 +54,15 @@ function titleCase(s) {
   const str = String(s || '');
   if (!str) return '';
   return str.charAt(0) + str.slice(1).toLowerCase();
+}
+
+function escapeHtml(s) {
+  return String(s ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
 }
 
 function normalizeEnvelope(env) {
@@ -135,7 +138,7 @@ function normalizeEnvelope(env) {
 
 /* ── skeleton ───────────────────────────────────────────────── */
 
-function Sk({ width, height, r = 8, style }) {
+function Sk({ width, height, r = 8, style, c }) {
   const pulse = useRef(new Animated.Value(0.45)).current;
   useEffect(() => {
     const loop = Animated.loop(
@@ -158,7 +161,7 @@ function Sk({ width, height, r = 8, style }) {
   return (
     <Animated.View
       style={[
-        { backgroundColor: '#D7DCE3', opacity: pulse },
+        { backgroundColor: c.surfaceElevated, opacity: pulse },
         { width, height, borderRadius: r },
         style,
       ]}
@@ -166,18 +169,19 @@ function Sk({ width, height, r = 8, style }) {
   );
 }
 
-function ReceiptSkeleton({ styles }) {
+function ReceiptSkeleton({ styles, c }) {
   return (
     <SafeAreaView style={styles.safe} edges={['top']}>
       <ScrollView contentContainerStyle={styles.scroll} scrollEnabled={false}>
         <View style={styles.paper}>
-          <Sk width="50%" height={18} r={6} />
-          <Sk width="70%" height={12} r={5} style={{ marginTop: 8 }} />
+          <Sk width="50%" height={18} r={6} c={c} />
+          <Sk width="70%" height={12} r={5} style={{ marginTop: 8 }} c={c} />
           <Sk
             width="100%"
             height={1}
             r={0}
             style={{ marginTop: 16, marginBottom: 12 }}
+            c={c}
           />
           {[0, 1, 2].map((i) => (
             <View
@@ -188,8 +192,8 @@ function ReceiptSkeleton({ styles }) {
                 marginVertical: 6,
               }}
             >
-              <Sk width="55%" height={12} r={5} />
-              <Sk width={60} height={12} r={5} />
+              <Sk width="55%" height={12} r={5} c={c} />
+              <Sk width={60} height={12} r={5} c={c} />
             </View>
           ))}
           <Sk
@@ -197,8 +201,9 @@ function ReceiptSkeleton({ styles }) {
             height={1}
             r={0}
             style={{ marginTop: 12, marginBottom: 10 }}
+            c={c}
           />
-          <Sk width="40%" height={20} r={6} />
+          <Sk width="40%" height={20} r={6} c={c} />
         </View>
       </ScrollView>
     </SafeAreaView>
@@ -226,6 +231,7 @@ export default function ReceiptScreen({ route, navigation }) {
   const [error, setError] = useState(null);
   const [copied, setCopied] = useState(false);
   const [sharing, setSharing] = useState(false);
+  const [pdfBusy, setPdfBusy] = useState(false);
 
   const mountedRef = useRef(true);
   const shotRef = useRef(null);
@@ -345,6 +351,135 @@ export default function ReceiptScreen({ route, navigation }) {
     formatCurrency,
   ]);
 
+  /* ── HTML for PDF ───────────────────────────────────────── */
+
+  const buildReceiptHtml = useCallback(() => {
+    const itemRows = items
+      .map((it) => {
+        const metaParts = [`${it.qty}${it.unitAbbrev ? ` ${it.unitAbbrev}` : ''} × ${formatCurrency(it.unitPrice)}`];
+        if (it.sku) metaParts.push(it.sku);
+        return `
+          <tr>
+            <td class="item-name">
+              <div class="name">${escapeHtml(it.name)}</div>
+              <div class="meta">${escapeHtml(metaParts.join(' · '))}</div>
+            </td>
+            <td class="item-amount">${escapeHtml(formatCurrency(it.lineTotal))}</td>
+          </tr>`;
+      })
+      .join('');
+
+    const discountRow = discount
+      ? `<tr><td>Discount</td><td class="right">-${escapeHtml(formatCurrency(discount))}</td></tr>`
+      : '';
+    const taxRow =
+      showTax && tax
+        ? `<tr><td>Tax</td><td class="right">${escapeHtml(formatCurrency(tax))}</td></tr>`
+        : '';
+    const cashierRow =
+      showCashier && cashierName
+        ? `<tr><td>Cashier</td><td>${escapeHtml(cashierName)}</td></tr>`
+        : '';
+    const customerRow =
+      showCustomer && customerName
+        ? `<tr><td>Customer</td><td>${escapeHtml(customerName)}</td></tr>`
+        : '';
+    const footerBlock = receiptFooter
+      ? `<div class="footer">${escapeHtml(receiptFooter)}</div>`
+      : '';
+
+    return `<!doctype html>
+<html>
+<head>
+<meta charset="utf-8" />
+<style>
+  @page { size: A4; margin: 24pt; }
+  * { box-sizing: border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    color: #111;
+    font-size: 12px;
+    margin: 0;
+  }
+  .header { text-align: center; margin-bottom: 16px; }
+  .shop { font-size: 20px; font-weight: 800; letter-spacing: -0.3px; }
+  .branch { color: #666; margin-top: 2px; }
+  .rule { border-top: 1px dashed #999; margin: 12px 0; }
+  table { width: 100%; border-collapse: collapse; }
+  td { padding: 4px 0; vertical-align: top; }
+  .meta td:first-child { color: #666; font-size: 10px; text-transform: uppercase; letter-spacing: 1px; width: 30%; }
+  .item-name .name { font-weight: 700; }
+  .item-name .meta { color: #666; font-size: 10px; margin-top: 2px; }
+  .item-amount { text-align: right; font-weight: 700; font-variant-numeric: tabular-nums; }
+  .totals td { font-size: 12px; }
+  .totals .right { text-align: right; font-variant-numeric: tabular-nums; }
+  .total-row { margin-top: 8px; }
+  .total-row td { font-size: 16px; font-weight: 800; }
+  .pay { color: #666; font-size: 11px; margin-top: 10px; }
+  .footer { text-align: center; color: #666; font-style: italic; margin-top: 16px; }
+</style>
+</head>
+<body>
+  <div class="header">
+    <div class="shop">${escapeHtml(receiptHeader || shopName)}</div>
+    ${branchName ? `<div class="branch">${escapeHtml(branchName)}</div>` : ''}
+  </div>
+
+  <div class="rule"></div>
+
+  <table class="meta">
+    <tr><td>Date</td><td>${escapeHtml(fmtDateTime(createdAt) || '—')}</td></tr>
+    <tr><td>Ref</td><td>${escapeHtml(reference)}</td></tr>
+    ${cashierRow}
+    ${customerRow}
+  </table>
+
+  <div class="rule"></div>
+
+  <table>
+    ${itemRows}
+  </table>
+
+  <div class="rule"></div>
+
+  <table class="totals">
+    <tr><td>Subtotal</td><td class="right">${escapeHtml(formatCurrency(subtotal))}</td></tr>
+    ${discountRow}
+    ${taxRow}
+  </table>
+
+  <div class="rule"></div>
+
+  <table class="total-row">
+    <tr><td>TOTAL</td><td class="right">${escapeHtml(formatCurrency(total))}</td></tr>
+  </table>
+
+  <div class="pay">Paid via ${escapeHtml(paymentMethod)}</div>
+
+  ${footerBlock}
+</body>
+</html>`;
+  }, [
+    receiptHeader,
+    shopName,
+    branchName,
+    reference,
+    createdAt,
+    showCashier,
+    cashierName,
+    showCustomer,
+    customerName,
+    items,
+    subtotal,
+    discount,
+    showTax,
+    tax,
+    total,
+    paymentMethod,
+    receiptFooter,
+    formatCurrency,
+  ]);
+
   /* ── image capture + share ──────────────────────────────── */
 
   const shareImage = useCallback(async () => {
@@ -371,7 +506,6 @@ export default function ReceiptScreen({ route, navigation }) {
         UTI: 'public.png',
       });
     } catch (e) {
-      // Fall back to text if capture or sharing fails.
       try {
         await Share.share({
           title: 'Receipt',
@@ -387,6 +521,35 @@ export default function ReceiptScreen({ route, navigation }) {
       if (mountedRef.current) setSharing(false);
     }
   }, [sharing, buildReceiptText]);
+
+  const sharePdf = useCallback(async () => {
+    if (pdfBusy) return;
+    setPdfBusy(true);
+    try {
+      const available = await Sharing.isAvailableAsync();
+      if (!available) {
+        Alert.alert(
+          'Cannot share',
+          'Sharing is not available on this device.'
+        );
+        return;
+      }
+      const html = buildReceiptHtml();
+      const { uri } = await Print.printToFileAsync({ html });
+      await Sharing.shareAsync(uri, {
+        mimeType: 'application/pdf',
+        dialogTitle: 'Share receipt',
+        UTI: 'com.adobe.pdf',
+      });
+    } catch (e) {
+      Alert.alert(
+        'PDF failed',
+        e?.message || 'Could not generate the PDF.'
+      );
+    } finally {
+      if (mountedRef.current) setPdfBusy(false);
+    }
+  }, [pdfBusy, buildReceiptHtml]);
 
   const onSms = async () => {
     const text = encodeURIComponent(buildReceiptText());
@@ -413,7 +576,7 @@ export default function ReceiptScreen({ route, navigation }) {
   };
 
   if (loading && !data) {
-    return <ReceiptSkeleton styles={styles} />;
+    return <ReceiptSkeleton styles={styles} c={c} />;
   }
 
   if (error && !data) {
@@ -442,7 +605,7 @@ export default function ReceiptScreen({ route, navigation }) {
           styles.scroll,
           {
             paddingBottom:
-              Math.max(insets.bottom, 16) + (items.length > 0 ? 200 : 140),
+              Math.max(insets.bottom, 16) + (items.length > 0 ? 220 : 160),
           },
         ]}
         showsVerticalScrollIndicator={false}
@@ -589,7 +752,7 @@ export default function ReceiptScreen({ route, navigation }) {
             (pressed || sharing) && { opacity: 0.9 },
           ]}
           onPress={shareImage}
-          disabled={sharing}
+          disabled={sharing || pdfBusy}
           accessibilityRole="button"
           accessibilityLabel="Share receipt"
         >
@@ -606,11 +769,19 @@ export default function ReceiptScreen({ route, navigation }) {
         <View style={styles.secondaryRow}>
           <SecondaryButton
             c={c}
+            icon="document-text-outline"
+            label="PDF"
+            color={c.primary}
+            onPress={sharePdf}
+            disabled={pdfBusy || sharing}
+          />
+          <SecondaryButton
+            c={c}
             icon="logo-whatsapp"
             label="WhatsApp"
             color="#25D366"
             onPress={shareImage}
-            disabled={sharing}
+            disabled={sharing || pdfBusy}
           />
           <SecondaryButton
             c={c}
@@ -618,7 +789,7 @@ export default function ReceiptScreen({ route, navigation }) {
             label="SMS"
             color="#0A84FF"
             onPress={onSms}
-            disabled={sharing}
+            disabled={sharing || pdfBusy}
           />
           <SecondaryButton
             c={c}
@@ -722,7 +893,7 @@ const makeStyles = (c) =>
       height: 1,
       borderWidth: 1,
       borderStyle: 'dashed',
-      borderColor: c.borderStrong,
+      borderColor: c.borderStrong || c.border,
       borderRadius: 1,
       marginVertical: spacing.md,
     },
@@ -855,8 +1026,8 @@ const makeStyles = (c) =>
     },
     secondaryRow: {
       flexDirection: 'row',
-      justifyContent: 'center',
-      gap: 24,
+      justifyContent: 'space-between',
+      paddingHorizontal: 4,
       marginTop: spacing.md,
     },
 

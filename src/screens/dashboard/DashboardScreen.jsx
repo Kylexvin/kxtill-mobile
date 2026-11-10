@@ -65,7 +65,6 @@ export default function DashboardScreen() {
 
   const [scopeModalOpen, setScopeModalOpen] = useState(false);
 
-  // Scope FIRST — no data dependency.
   const {
     viewBranchId,
     scopeLabel,
@@ -74,14 +73,12 @@ export default function DashboardScreen() {
     pickScope,
   } = useDashboardScope({ isOwner });
 
-  // Data SECOND — depends on viewBranchId.
   const { data, loading, refreshing, error, staleError, refresh, reload } =
     useDashboardData({
       organizationId: activeOrganization?.id,
       branchId: viewBranchId,
     });
 
-  // Search.
   const {
     input: query,
     setInput: setQuery,
@@ -122,7 +119,6 @@ export default function DashboardScreen() {
     !products.length &&
     !recent.length;
 
-  // Currency comes from SettingsContext — KxTill setting, then org fallback.
   const currency = getCurrency();
   const gross = Number(sales?.gross || 0);
   const delta = sales?.deltaPct;
@@ -173,6 +169,32 @@ export default function DashboardScreen() {
     (action) => {
       if (!action) return;
 
+      // POS — full-screen sale flow. Needs a branchId when known.
+      if (action.id === 'pos') {
+        navigation.navigate(ROUTES.TAB_BUSINESS, {
+          screen: ROUTES.POS,
+          params: {
+            branchId: viewBranchId || null,
+            branchName:
+              orgBranches?.find((b) => b.id === viewBranchId)?.name || null,
+          },
+        });
+        return;
+      }
+
+      // Team — branch-scoped staff list.
+      if (action.id === 'team') {
+        navigation.navigate(ROUTES.TAB_BUSINESS, {
+          screen: ROUTES.BRANCH_TEAM,
+          params: {
+            branchId: viewBranchId || null,
+            branchName:
+              orgBranches?.find((b) => b.id === viewBranchId)?.name || null,
+          },
+        });
+        return;
+      }
+
       if (action.id === 'branches') {
         navigation.navigate(ROUTES.TAB_BUSINESS);
         return;
@@ -193,13 +215,9 @@ export default function DashboardScreen() {
         navigation.navigate(ROUTES.TAB_BUSINESS);
         return;
       }
-
-    
     },
     [navigation, viewBranchId, orgBranches]
   );
-
-
 
   // ── Early returns ───────────────────────────────────────────────
   if (loading && !data && !error) {
@@ -276,6 +294,12 @@ export default function DashboardScreen() {
 
           {showAggregates && pulse ? <PulseRow pulse={pulse} /> : null}
 
+          {actions.length > 0 ? (
+            <Section title="Quick actions">
+              <QuickActions items={actions} onPress={onPressAction} />
+            </Section>
+          ) : null}
+
           {attention.length > 0 ? (
             <Section
               title="Needs attention"
@@ -290,17 +314,10 @@ export default function DashboardScreen() {
             </Section>
           ) : null}
 
-          {actions.length > 0 ? (
-            <Section title="Quick actions">
-              <QuickActions items={actions} onPress={onPressAction} />
-            </Section>
-          ) : null}
+
 
           {branches.length > 0 ? (
-<Section
-  title="Branch performance"
-
->
+            <Section title="Branch performance">
               <BranchPerformance currency={currency} branches={branches} />
             </Section>
           ) : null}
@@ -318,10 +335,7 @@ export default function DashboardScreen() {
           ) : null}
 
           {products.length > 0 ? (
-            <Section
-              title="Top products"
-           
-            >
+            <Section title="Top products">
               <TopProducts currency={currency} products={products} />
             </Section>
           ) : null}

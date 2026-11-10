@@ -3,7 +3,9 @@
 // Settings source of truth for the mobile app.
 //
 //   - Fetch the org's KxTill settings (via kxtillSettingsService).
-//   - Cache per-org (AsyncStorage, TTL 5 min).
+//   - Cache per-org (AsyncStorage, TTL 5 min for freshness).
+//   - Stale cache is still served when the network fails, so an offline
+//     till always has last-known currency / decimals / receipt details.
 //   - Expose: settings, loading, saving, error, refreshSettings,
 //     updateSettings, getters, formatters, isFeatureEnabled.
 //   - No hardcoded country/currency/timezone/locale anywhere.
@@ -20,6 +22,7 @@ import React, {
   useRef,
   useState,
 } from 'react';
+import { AppState } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import kxtillSettingsService from '../services/kxtillSettings.service';
 import { useOrganizationContext } from './OrganizationContext';
@@ -29,14 +32,20 @@ const CACHE_TTL_MS = 5 * 60 * 1000;
 
 const cacheKey = (orgId) => `${CACHE_PREFIX}:${orgId}`;
 
-async function readCache(orgId) {
+/**
+ * Read cached settings for an org.
+ *   allowStale=false → only return if within TTL (fresh).
+ *   allowStale=true  → return whatever is cached, regardless of age.
+ */
+async function readCache(orgId, { allowStale = false } = {}) {
   if (!orgId) return null;
   try {
     const raw = await AsyncStorage.getItem(cacheKey(orgId));
     if (!raw) return null;
     const parsed = JSON.parse(raw);
     if (!parsed?.data || !parsed?.timestamp) return null;
-    if (Date.now() - parsed.timestamp > CACHE_TTL_MS) return null;
+    const fresh = Date.now() - parsed.timestamp <= CACHE_TTL_MS;
+    if (!fresh && !allowStale) return null;
     return parsed.data;
   } catch {
     return null;
@@ -69,6 +78,7 @@ export function SettingsProvider({ children }) {
   const mountedRef = useRef(true);
   const tokenRef = useRef(0);
   const settingsRef = useRef(null);
+  const appStateRef = useRef(AppState.currentState);
 
   useEffect(() => {
     mountedRef.current = true;
@@ -94,6 +104,8 @@ export function SettingsProvider({ children }) {
 
       const myToken = ++tokenRef.current;
 
+      // Fast path: show fresh cache immediately while the network call
+      // runs. Only if we don't already have settings in memory.
       if (!force && settingsRef.current == null) {
         const cached = await readCache(orgId);
         if (mountedRef.current && myToken === tokenRef.current && cached) {
@@ -114,6 +126,20 @@ export function SettingsProvider({ children }) {
         return next;
       } catch (e) {
         if (!mountedRef.current || myToken !== tokenRef.current) return null;
+
+        // Network / server failure. Fall back to last-known settings
+        // (even if older than TTL) so an offline till keeps working.
+        // Only do this if we don't already have something in memory —
+        // in-memory settings are newer than anything on disk.
+        if (settingsRef.current == null) {
+          const stale = await readCache(orgId, { allowStale: true });
+          if (mountedRef.current && myToken === tokenRef.current && stale) {
+            setSettings(stale);
+            setError(null);
+            return stale;
+          }
+        }
+
         const message =
           e?.response?.data?.error ||
           e?.response?.data?.message ||
@@ -134,6 +160,22 @@ export function SettingsProvider({ children }) {
     fetchSettings();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [orgId]);
+
+  /* ── foreground refresh ─────────────────────────────────────── */
+  // Settings are functionally required (currency, decimals, receipt
+  // header, tax number). When the app returns to the foreground after
+  // being backgrounded, re-fetch so a change made elsewhere (web,
+  // another device) reflects without a restart.
+  useEffect(() => {
+    const sub = AppState.addEventListener('change', (next) => {
+      const prev = appStateRef.current;
+      appStateRef.current = next;
+      if (prev.match(/inactive|background/) && next === 'active') {
+        if (orgId) fetchSettings({ force: true });
+      }
+    });
+    return () => sub.remove();
+  }, [orgId, fetchSettings]);
 
   const refreshSettings = useCallback(
     () => fetchSettings({ force: true }),

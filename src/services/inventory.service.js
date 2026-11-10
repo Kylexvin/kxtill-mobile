@@ -85,10 +85,56 @@ export async function archiveProduct(organizationId, productId) {
   return data || null;
 }
 
+export async function getProductByBarcode(organizationId, branchId, barcode) {
+  const { data } = await api.get(
+    `/api/v1/organizations/${organizationId}/kxtill/products/barcode/${encodeURIComponent(barcode)}`,
+    { params: { branchId } }
+  );
+  return data?.product || null;
+}
+
+// Quick-picks: favorites, recent, top for the POS chips row.
+
+export async function getFavoriteProducts(organizationId, branchId) {
+  const { data } = await api.get(
+    `/api/v1/organizations/${organizationId}/kxtill/mobile/branches/${branchId}/products/favorites`
+  );
+  return data?.data?.items || data?.items || [];
+}
+
+export async function toggleFavoriteProduct(organizationId, branchId, productId) {
+  const { data } = await api.post(
+    `/api/v1/organizations/${organizationId}/kxtill/mobile/branches/${branchId}/products/favorites`,
+    { productId }
+  );
+  return data?.data || data;
+}
+
+export async function getRecentProducts(organizationId, branchId, params = {}) {
+  const { data } = await api.get(
+    `/api/v1/organizations/${organizationId}/kxtill/mobile/branches/${branchId}/products/recent`,
+    { params }
+  );
+  return data?.data?.items || data?.items || [];
+}
+
+export async function getTopProducts(organizationId, branchId, params = {}) {
+  const { data } = await api.get(
+    `/api/v1/organizations/${organizationId}/kxtill/mobile/branches/${branchId}/products/top`,
+    { params }
+  );
+  return data?.data?.items || data?.items || [];
+}
+
 export default {
   listProducts,
   getProducts,
   getBranchProducts,
+  getProductByBarcode,
+  getFavoriteProducts,
+  toggleFavoriteProduct,
+  getRecentProducts,
+  getTopProducts,
   generateBarcode,
   getInventoryHealth,
   getInventorySummary,

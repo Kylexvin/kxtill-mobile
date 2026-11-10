@@ -1,12 +1,4 @@
 // src/navigation/ActionsArc.jsx
-//
-// The pop-up action arc. Lives in an overlay ABOVE the tab navigator so it
-// is never clipped. Five universal actions, always visible — no vertical
-// gating, no shift gating. The fan is designed for five; four looks
-// unbalanced, so every org gets all five regardless of product instances.
-//
-// Each action's destination is wired in MainTabNavigator's handleArcAction.
-// The arc itself does not navigate — it only calls onAction(item).
 
 import {
   createContext,
@@ -14,7 +6,6 @@ import {
   useContext,
   useEffect,
   useMemo,
-  useRef,
   useState,
 } from 'react';
 import {
@@ -35,37 +26,11 @@ export const PLUS_LIFT = 10;
 export const useBottomInset = () => Math.max(useSafeAreaInsets().bottom, 8);
 
 export const ARC_ITEMS = [
-
-  {
-    id: 'share-receipt',
-    label: 'Share receipt',
-    short: 'Receipt',
-    icon: 'share-social-outline',
-  },
-  {
-    id: 'add-product',
-    label: 'Add product',
-    short: 'Product',
-    icon: 'add-circle-outline',
-  },
-    {
-    id: 'pos',
-    label: 'POS',
-    short: 'POS',
-    icon: 'cart-outline',
-  },
-  {
-    id: 'barcode-tool',
-    label: 'Barcode tool',
-    short: 'Barcode',
-    icon: 'barcode-outline',
-  },
-  {
-    id: 'team',
-    label: 'Team',
-    short: 'Team',
-    icon: 'people-outline',
-  },
+  { id: 'share-receipt', label: 'Share receipt', short: 'Receipt', icon: 'share-social-outline' },
+  { id: 'add-product', label: 'Add product', short: 'Product', icon: 'add-circle-outline' },
+  { id: 'pos', label: 'POS', short: 'POS', icon: 'cart-outline' },
+  { id: 'barcode-tool', label: 'Barcode tool', short: 'Barcode', icon: 'barcode-outline' },
+  { id: 'team', label: 'Team', short: 'Team', icon: 'people-outline' },
 ];
 
 const RADIUS = 118;
@@ -74,11 +39,14 @@ const ARC_GAP = 35;
 const LABEL_BLOCK = 25;
 const COL_W = 66;
 
+// Gap above the tab bar so the backdrop doesn't swallow plus-button taps.
+const BACKDROP_GRACE = PLUS_LIFT + 12;
+
 const ArcContext = createContext(null);
 
 export function ActionsArcProvider({ children, onAction }) {
   const [open, setOpen] = useState(false);
-  const progress = useRef(new Animated.Value(0)).current;
+  const progress = useMemo(() => new Animated.Value(0), []);
   const toggle = useCallback(() => setOpen((v) => !v), []);
   const close = useCallback(() => setOpen(false), []);
   const value = useMemo(
@@ -101,15 +69,9 @@ export function ActionsArcOverlay() {
   const bottomInset = useBottomInset();
   const barHeight = BAR_ROW + bottomInset;
 
-  // Five-item fan. Fixed count, but the ref array is still sized by
-  // ARC_ITEMS.length so that adding a sixth later does not break.
-  const vals = useRef(null);
-  if (!vals.current || vals.current.length !== ARC_ITEMS.length) {
-    vals.current = ARC_ITEMS.map(() => new Animated.Value(0));
-  }
+  const vals = useMemo(() => ARC_ITEMS.map(() => new Animated.Value(0)), []);
 
   useEffect(() => {
-    if (!vals.current) return;
     if (open) {
       Animated.parallel([
         Animated.timing(progress, {
@@ -119,12 +81,15 @@ export function ActionsArcOverlay() {
         }),
         Animated.stagger(
           45,
-          vals.current.map((v) =>
+          vals.map((v) =>
             Animated.spring(v, {
               toValue: 1,
               friction: 6,
               tension: 110,
-              useNativeDriver: true,
+              // MUST be false: native-driver transforms keep the touch
+              // target at the untransformed position on Android, so the
+              // first tap misses the bubble.
+              useNativeDriver: false,
             })
           )
         ),
@@ -136,16 +101,16 @@ export function ActionsArcOverlay() {
           duration: 160,
           useNativeDriver: true,
         }),
-        ...vals.current.map((v) =>
+        ...vals.map((v) =>
           Animated.timing(v, {
             toValue: 0,
             duration: 140,
-            useNativeDriver: true,
+            useNativeDriver: false,
           })
         ),
       ]).start();
     }
-  }, [open, progress]);
+  }, [open, progress, vals]);
 
   useEffect(() => {
     if (!open) return undefined;
@@ -158,17 +123,13 @@ export function ActionsArcOverlay() {
 
   const originFromBottom = bottomInset + BAR_ROW / 2 + PLUS_LIFT + ARC_GAP;
   const cx = width / 2;
-
-  const total = ARC_ITEMS.length; // 5
+  const total = ARC_ITEMS.length;
   const spread = 64;
 
   return (
-    <View
-      style={StyleSheet.absoluteFill}
-      pointerEvents={open ? 'box-none' : 'none'}
-    >
+    <View style={StyleSheet.absoluteFill} pointerEvents={open ? 'box-none' : 'none'}>
       <Pressable
-        style={[styles.backdropHit, { bottom: barHeight }]}
+        style={[styles.backdropHit, { bottom: barHeight + BACKDROP_GRACE }]}
         onPress={close}
         accessibilityLabel="Close actions"
       >
@@ -192,7 +153,7 @@ export function ActionsArcOverlay() {
         const rad = (angleDeg * Math.PI) / 180;
         const dx = Math.sin(rad) * RADIUS;
         const up = Math.cos(rad) * RADIUS;
-        const v = vals.current[i];
+        const v = vals[i];
 
         return (
           <Animated.View
@@ -203,38 +164,21 @@ export function ActionsArcOverlay() {
               {
                 left: cx + dx - COL_W / 2,
                 bottom: originFromBottom + up - SIZE / 2 - LABEL_BLOCK,
-                opacity: v.interpolate({
-                  inputRange: [0, 0.6, 1],
-                  outputRange: [0, 1, 1],
-                }),
+                opacity: v,
                 transform: [
-                  {
-                    translateX: v.interpolate({
-                      inputRange: [0, 1],
-                      outputRange: [-dx, 0],
-                    }),
-                  },
-                  {
-                    translateY: v.interpolate({
-                      inputRange: [0, 1],
-                      outputRange: [up + ARC_GAP + LABEL_BLOCK / 2, 0],
-                    }),
-                  },
-                  {
-                    scale: v.interpolate({
-                      inputRange: [0, 1],
-                      outputRange: [0.3, 1],
-                    }),
-                  },
+                  { translateX: v.interpolate({ inputRange: [0, 1], outputRange: [-dx, 0] }) },
+                  { translateY: v.interpolate({ inputRange: [0, 1], outputRange: [up + ARC_GAP + LABEL_BLOCK / 2, 0] }) },
+                  { scale: v.interpolate({ inputRange: [0, 1], outputRange: [0.3, 1] }) },
                 ],
               },
             ]}
           >
             <Pressable
               onPress={() => {
-                close();
                 onAction?.(item);
+                close();
               }}
+              hitSlop={10}
               style={({ pressed }) => [
                 styles.bubble,
                 { backgroundColor: c.primary },
@@ -251,10 +195,7 @@ export function ActionsArcOverlay() {
                 { backgroundColor: c.surface, borderColor: c.border },
               ]}
             >
-              <Text
-                style={[styles.label, { color: c.textPrimary }]}
-                numberOfLines={1}
-              >
+              <Text style={[styles.label, { color: c.textPrimary }]} numberOfLines={1}>
                 {item.short}
               </Text>
             </View>
@@ -267,11 +208,7 @@ export function ActionsArcOverlay() {
 
 const styles = StyleSheet.create({
   backdropHit: { position: 'absolute', top: 0, left: 0, right: 0 },
-  column: {
-    position: 'absolute',
-    width: COL_W,
-    alignItems: 'center',
-  },
+  column: { position: 'absolute', width: COL_W, alignItems: 'center' },
   bubble: {
     width: SIZE,
     height: SIZE,

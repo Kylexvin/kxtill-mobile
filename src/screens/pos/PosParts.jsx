@@ -1,7 +1,6 @@
 // src/screens/pos/PosParts.jsx
-//
-// Presentational components for the POS screen.
 
+import { useState, useEffect, useRef } from 'react';
 import {
   View,
   Text,
@@ -9,94 +8,154 @@ import {
   Pressable,
   FlatList,
   ScrollView,
+  Modal,
   ActivityIndicator,
+  useWindowDimensions,
+  Image,
+  Animated,
 } from 'react-native';
 import Ionicons from '@react-native-vector-icons/ionicons';
+import { BRAND_ICONS } from '../../constants/config';
 
 /* ── Header ─────────────────────────────────────────────────── */
 
+function HeaderAction({ icon, label, labelStyle, badge, onPress, c, styles }) {
+  return (
+    <Pressable onPress={onPress} style={styles.actionWrap} hitSlop={4}>
+      <View style={styles.actionBtn}>
+        <Ionicons name={icon} size={22} color={c.textPrimary} />
+        {badge > 0 ? (
+          <View style={styles.actionBadge}>
+            <Text style={styles.actionBadgeText}>{badge}</Text>
+          </View>
+        ) : null}
+      </View>
+      <Text style={[styles.actionLabel, labelStyle]} numberOfLines={1}>
+        {label}
+      </Text>
+    </Pressable>
+  );
+}
+
 export function PosHeader({
   syncStatus,
+  pendingCount,
   heldCount,
   totalQty,
   subtotal,
-  onSearch,
+  onScan,
   onHeld,
   onCart,
-  onMenu,
+  onCloseShift,
   formatCurrency,
   c,
   styles,
 }) {
-  const dot =
-    syncStatus === 'offline'
-      ? c.danger
-      : syncStatus === 'pending'
-      ? '#F59E0B'
-      : c.success;
+  const { width } = useWindowDimensions();
+  const compact = width < 380;
+
+  const tone = syncStatus === 'pending' ? c.warning : c.success;
+  const statusLabel =
+    syncStatus === 'pending'
+      ? `${pendingCount || 0} syncing`
+      : 'Online';
 
   return (
     <View style={styles.header}>
-      <View style={[styles.syncDot, { backgroundColor: dot }]} />
+      <View style={styles.brandWrap}>
+        <View style={styles.markWrap}>
+          <View style={styles.logoTile}>
+            <Image
+              source={BRAND_ICONS.kxtill}
+              style={styles.logo}
+              resizeMode="contain"
+            />
+          </View>
+        </View>
 
-      <Pressable onPress={onSearch} style={styles.headerIcon} hitSlop={6}>
-        <Ionicons name="search" size={22} color={c.textPrimary} />
-      </Pressable>
-      <View style={[styles.headerIcon, styles.iconBtnDisabled]}>
-        <Ionicons name="barcode-outline" size={22} color={c.textMuted} />
+        {!compact ? <View style={styles.brandDivider} /> : null}
+
+        <View style={styles.statusRow}>
+          <Text
+            style={[styles.statusText, { color: c.textPrimary }]}
+            numberOfLines={1}
+          >
+            KxTill
+          </Text>
+          <View style={[styles.statusDot, { backgroundColor: tone }]} />
+          {!compact ? (
+            <Text
+              style={[styles.statusText, { color: tone, fontWeight: '600' }]}
+              numberOfLines={1}
+            >
+              {statusLabel}
+            </Text>
+          ) : null}
+        </View>
       </View>
 
-      <View style={{ flex: 1 }} />
-
-      <Pressable onPress={onHeld} style={styles.headerIcon} hitSlop={6}>
-        <Ionicons name="pause-circle-outline" size={24} color={c.textPrimary} />
-        {heldCount > 0 ? (
-          <View style={styles.headerBadge}>
-            <Text style={styles.headerBadgeText}>{heldCount}</Text>
+      <View style={styles.headerActions}>
+        <HeaderAction
+          icon="scan-outline"
+          label="Scan"
+          onPress={onScan}
+          c={c}
+          styles={styles}
+        />
+        <HeaderAction
+          icon="pause-circle-outline"
+          label="Paused"
+          badge={heldCount}
+          onPress={onHeld}
+          c={c}
+          styles={styles}
+        />
+        <Pressable
+          onPress={onCart}
+          onLongPress={onCloseShift}
+          delayLongPress={600}
+          style={styles.actionWrap}
+          hitSlop={4}
+        >
+          <View style={styles.actionBtn}>
+            <Ionicons name="cart-outline" size={22} color={c.textPrimary} />
+            {totalQty > 0 ? (
+              <View style={styles.actionBadge}>
+                <Text style={styles.actionBadgeText}>{totalQty}</Text>
+              </View>
+            ) : null}
           </View>
-        ) : null}
-      </Pressable>
-
-      <Pressable onPress={onCart} style={styles.cartPill}>
-        <Ionicons name="cart" size={20} color={c.textOnPrimary} />
-        <Text style={styles.cartPillText}>
-          {totalQty} · {formatCurrency(subtotal)}
-        </Text>
-      </Pressable>
-
-      <Pressable onPress={onMenu} style={styles.headerIcon} hitSlop={6}>
-        <Ionicons name="ellipsis-vertical" size={20} color={c.textPrimary} />
-      </Pressable>
+          <Text
+            style={[styles.actionLabel, { color: c.primary, fontWeight: '800' }]}
+            numberOfLines={1}
+          >
+            {formatCurrency(subtotal)}
+          </Text>
+        </Pressable>
+      </View>
     </View>
   );
 }
 
-/* ── Search bar ─────────────────────────────────────────────── */
-
-export function PosSearchBar({ query, setQuery, onClose, c, styles }) {
+export function PosSearchBar({ query, setQuery, c, styles }) {
   return (
     <View style={styles.searchRow}>
       <View style={styles.searchBox}>
-        <Ionicons name="search" size={16} color={c.textMuted} />
+        <Ionicons name="search" size={22} color={c.textMuted} />
         <TextInput
           style={styles.searchInput}
-          placeholder="Search products"
+          placeholder="Search products by name, barcode or SKU"
           placeholderTextColor={c.textMuted}
           value={query}
           onChangeText={setQuery}
-          autoFocus
           autoCorrect={false}
           returnKeyType="search"
         />
-        <Pressable
-          onPress={() => {
-            setQuery('');
-            onClose();
-          }}
-          hitSlop={8}
-        >
-          <Ionicons name="close-circle" size={18} color={c.textMuted} />
-        </Pressable>
+        {query.length > 0 ? (
+          <Pressable onPress={() => setQuery('')} hitSlop={8}>
+            <Ionicons name="close-circle" size={20} color={c.textMuted} />
+          </Pressable>
+        ) : null}
       </View>
     </View>
   );
@@ -104,9 +163,41 @@ export function PosSearchBar({ query, setQuery, onClose, c, styles }) {
 
 /* ── Category chips ─────────────────────────────────────────── */
 
+const MAX_VISIBLE_CATS = 5;
+
+function catIcon(name) {
+  const n = String(name || '').toLowerCase();
+  if (!name) return 'grid-outline';
+  if (/bever|drink|juice|soda|water/.test(n)) return 'beer-outline';
+  if (/snack|crisp|biscuit/.test(n)) return 'fast-food-outline';
+  if (/bak|bread/.test(n)) return 'pizza-outline';
+  if (/dairy|milk|yog/.test(n)) return 'water-outline';
+  if (/house|clean/.test(n)) return 'home-outline';
+  if (/antibio|pharm|medic|drug/.test(n)) return 'medkit-outline';
+  return 'pricetag-outline';
+}
+
 export function PosCategoryChips({ categories, active, onPick, c, styles }) {
+  const [moreOpen, setMoreOpen] = useState(false);
   if (categories.length === 0) return null;
-  const all = [null, ...categories];
+
+  const visible = categories.slice(0, MAX_VISIBLE_CATS);
+  const rest = categories.slice(MAX_VISIBLE_CATS);
+  const activeInRest = rest.includes(active);
+
+  const chip = (cat, label, on, onPress, icon) => (
+    <Pressable
+      key={cat || '__all'}
+      onPress={onPress}
+      style={[styles.catChip, on && styles.catChipActive]}
+    >
+      <Ionicons name={icon} size={16} color={on ? c.primary : c.textPrimary} />
+      <Text style={[styles.catChipText, on && styles.catChipTextActive]}>
+        {label}
+      </Text>
+    </Pressable>
+  );
+
   return (
     <View style={styles.chipsWrap}>
       <ScrollView
@@ -115,21 +206,120 @@ export function PosCategoryChips({ categories, active, onPick, c, styles }) {
         contentContainerStyle={{ gap: 8, paddingHorizontal: 12 }}
         keyboardShouldPersistTaps="handled"
       >
-        {all.map((cat) => {
-          const on = active === cat;
-          return (
-            <Pressable
-              key={cat || '__all'}
-              onPress={() => onPick(cat)}
-              style={[styles.catChip, on && styles.catChipActive]}
+        {chip(null, 'All', active === null, () => onPick(null), 'grid-outline')}
+        {visible.map((cat) =>
+          chip(cat, cat, active === cat, () => onPick(cat), catIcon(cat))
+        )}
+        {rest.length > 0 ? (
+          <Pressable
+            onPress={() => setMoreOpen(true)}
+            style={[styles.catChip, activeInRest && styles.catChipActive]}
+          >
+            <Text
+              style={[styles.catChipText, activeInRest && styles.catChipTextActive]}
             >
-              <Text style={[styles.catChipText, on && styles.catChipTextActive]}>
-                {cat || 'All'}
-              </Text>
-            </Pressable>
-          );
-        })}
+              {activeInRest ? active : 'More'}
+            </Text>
+            <Ionicons
+              name="chevron-down"
+              size={14}
+              color={activeInRest ? c.primary : c.textPrimary}
+            />
+          </Pressable>
+        ) : null}
       </ScrollView>
+
+      <Modal
+        visible={moreOpen}
+        animationType="slide"
+        transparent
+        onRequestClose={() => setMoreOpen(false)}
+      >
+        <View style={styles.sheetBackdrop}>
+          <Pressable style={{ flex: 1 }} onPress={() => setMoreOpen(false)} />
+          <View style={styles.sheet}>
+            <View style={styles.sheetHandle} />
+            <Text style={styles.sheetTitle}>Categories</Text>
+            <ScrollView style={{ maxHeight: 360 }}>
+              {rest.map((cat) => (
+                <Pressable
+                  key={cat}
+                  onPress={() => {
+                    onPick(cat);
+                    setMoreOpen(false);
+                  }}
+                  style={styles.resultRow}
+                >
+                  <Ionicons name={catIcon(cat)} size={18} color={c.textPrimary} />
+                  <Text style={[styles.resultName, { flex: 1 }]}>{cat}</Text>
+                  {active === cat ? (
+                    <Ionicons name="checkmark-circle" size={22} color={c.primary} />
+                  ) : null}
+                </Pressable>
+              ))}
+            </ScrollView>
+            <Pressable onPress={() => setMoreOpen(false)} style={styles.secondaryBtn}>
+              <Text style={styles.secondaryBtnText}>Close</Text>
+            </Pressable>
+          </View>
+        </View>
+      </Modal>
+    </View>
+  );
+}
+
+/* ── Skeleton grid ──────────────────────────────────────────── */
+
+function SkeletonTile({ pulse, styles }) {
+  return (
+    <Animated.View
+      style={[
+        styles.tile,
+        styles.tileSkeleton,
+        { opacity: pulse },
+      ]}
+    >
+      <View style={styles.skName} />
+      <View style={styles.skNameShort} />
+      <View style={styles.tileBottom}>
+        <View style={{ flex: 1, gap: 6 }}>
+          <View style={styles.skPrice} />
+          <View style={styles.skStock} />
+        </View>
+      </View>
+    </Animated.View>
+  );
+}
+
+function ProductGridSkeleton({ c, styles }) {
+  const pulse = useRef(new Animated.Value(0.45)).current;
+
+  useEffect(() => {
+    const loop = Animated.loop(
+      Animated.sequence([
+        Animated.timing(pulse, {
+          toValue: 0.85,
+          duration: 700,
+          useNativeDriver: true,
+        }),
+        Animated.timing(pulse, {
+          toValue: 0.45,
+          duration: 700,
+          useNativeDriver: true,
+        }),
+      ])
+    );
+    loop.start();
+    return () => loop.stop();
+  }, [pulse]);
+
+  return (
+    <View style={styles.gridContent}>
+      <View style={styles.gridRowWrap}>
+        {Array.from({ length: 9 }).map((_, i) => (
+          <SkeletonTile key={i} pulse={pulse} styles={styles} />
+        ))}
+      </View>
     </View>
   );
 }
@@ -140,6 +330,7 @@ export function PosProductGrid({
   products,
   inCart,
   searching,
+  loadedOnce,
   error,
   query,
   onAdd,
@@ -148,59 +339,88 @@ export function PosProductGrid({
   c,
   styles,
 }) {
-  if (searching && products.length === 0) {
+  // First load hasn't completed yet → skeleton.
+  // Guards against the "No products yet" flash between gate-ready
+  // and the first catalogue load finishing.
+  if (!loadedOnce) {
+    return <ProductGridSkeleton styles={styles} />;
+  }
+
+  // Searching with nothing yet AND no query → initial empty state,
+  // keep showing spinner rather than the empty panel.
+  if (searching && products.length === 0 && !query) {
     return (
-      <View style={styles.center}>
+      <View style={styles.gridCenter}>
         <ActivityIndicator color={c.primary} />
       </View>
     );
   }
 
+  const topProducts = products.slice(0, 5);
+  const restProducts = products.slice(5);
+
+  const renderTile = (item) => (
+    <PosProductTile
+      key={item.id}
+      product={item}
+      qty={inCart[item.id] || 0}
+      onAdd={onAdd}
+      formatCurrency={formatCurrency}
+      c={c}
+      styles={styles}
+    />
+  );
+
   return (
     <FlatList
-      data={products}
+      data={[]}
       keyExtractor={(item) => item.id}
       numColumns={3}
-      columnWrapperStyle={styles.gridRow}
       contentContainerStyle={styles.gridContent}
       keyboardShouldPersistTaps="handled"
       ListHeaderComponent={
-        error ? (
-          <View style={styles.errorBox}>
-            <Ionicons name="alert-circle-outline" size={16} color={c.danger} />
-            <Text style={styles.errorText} numberOfLines={2}>
-              {error}
-            </Text>
-            <Pressable onPress={onRetry} hitSlop={8}>
-              <Text style={styles.retry}>Retry</Text>
-            </Pressable>
-          </View>
-        ) : null
+        <>
+          {error ? (
+            <View style={styles.errorBox}>
+              <Ionicons name="alert-circle-outline" size={16} color={c.danger} />
+              <Text style={styles.errorText} numberOfLines={2}>
+                {error}
+              </Text>
+              <Pressable onPress={onRetry} hitSlop={8}>
+                <Text style={styles.retry}>Retry</Text>
+              </Pressable>
+            </View>
+          ) : null}
+
+          {!query && topProducts.length > 0 && (
+            <View style={styles.gridRowWrap}>
+              {topProducts.map(renderTile)}
+            </View>
+          )}
+        </>
       }
       ListEmptyComponent={
-        searching ? (
-          <View style={styles.center}>
-            <ActivityIndicator color={c.primary} />
-          </View>
-        ) : (
-          <View style={styles.emptyCart}>
-            <Ionicons name="cube-outline" size={28} color={c.textMuted} />
-            <Text style={styles.emptyTitle}>
-              {query ? 'No products match' : 'No products yet'}
-            </Text>
-          </View>
-        )
+        !query && topProducts.length === 0 ? (
+          searching ? (
+            <View style={styles.gridCenter}>
+              <ActivityIndicator color={c.primary} />
+            </View>
+          ) : (
+            <View style={styles.emptyCart}>
+              <Ionicons name="cube-outline" size={32} color={c.textMuted} />
+              <Text style={styles.emptyTitle}>
+                {query ? 'No products match' : 'No products yet'}
+              </Text>
+            </View>
+          )
+        ) : null
       }
-      renderItem={({ item }) => (
-        <PosProductTile
-          product={item}
-          qty={inCart[item.id] || 0}
-          onAdd={onAdd}
-          formatCurrency={formatCurrency}
-          c={c}
-          styles={styles}
-        />
-      )}
+      renderItem={() => null}
+      ListFooterComponent={
+        <View style={styles.gridRowWrap}>
+          {(query ? products : restProducts).map(renderTile)}
+        </View>
+      }
     />
   );
 }
@@ -226,17 +446,31 @@ function PosProductTile({ product, qty, onAdd, formatCurrency, c, styles }) {
           <Text style={styles.tileQtyText}>{qty}</Text>
         </View>
       ) : null}
-      <Text style={[styles.tileName, out && styles.tileNameDisabled]} numberOfLines={2}>
+
+      <Text
+        style={[styles.tileName, out && styles.tileNameDisabled]}
+        numberOfLines={2}
+      >
         {product.name}
       </Text>
+
       <View style={styles.tileBottom}>
-        <Text style={[styles.tilePrice, out && styles.tilePriceDisabled]} numberOfLines={1}>
-          {out ? 'Out' : formatCurrency(product.price)}
-        </Text>
+        <View style={{ flex: 1, minWidth: 0 }}>
+          <Text style={[styles.tilePrice, out && styles.tilePriceDisabled]}>
+            {out ? 'Out of stock' : formatCurrency(product.price)}
+          </Text>
+
+          {!out ? (
+            <Text style={[styles.tileStock, low && styles.tileStockLow]}>
+              {product.stock} in stock
+            </Text>
+          ) : null}
+        </View>
+
         {multi ? (
-          <Ionicons name="layers-outline" size={12} color={c.textMuted} />
-        ) : low ? (
-          <View style={styles.lowDot} />
+          <View style={styles.unitBadge}>
+            <Text style={styles.unitBadgeText}>Multi</Text>
+          </View>
         ) : null}
       </View>
     </Pressable>
@@ -249,9 +483,73 @@ export function PosFooter({
   totalQty,
   subtotal,
   cartEmpty,
-  onUndo,
   onPayCash,
   onPayMpesa,
+  onCloseShift,
+  formatCurrency,
+  bottomInset,
+  c,
+  styles,
+}) {
+  const [contentHeight, setContentHeight] = useState(0);
+  const anim = useRef(new Animated.Value(cartEmpty ? 0 : 1)).current;
+
+  useEffect(() => {
+    Animated.timing(anim, {
+      toValue: cartEmpty ? 0 : 1,
+      duration: 250,
+      useNativeDriver: false,
+    }).start();
+  }, [cartEmpty, anim]);
+
+  const height = anim.interpolate({
+    inputRange: [0, 1],
+    outputRange: [0, contentHeight || 1],
+  });
+
+  const sharedProps = {
+    totalQty,
+    subtotal,
+    cartEmpty,
+    onPayCash,
+    onPayMpesa,
+    onCloseShift,
+    formatCurrency,
+    bottomInset,
+    c,
+    styles,
+  };
+
+  return (
+    <Animated.View
+      style={[styles.footerWrapper, { height }]}
+      pointerEvents={cartEmpty ? 'none' : 'auto'}
+    >
+      <View
+        style={{ position: 'absolute', left: 0, right: 0, opacity: 0 }}
+        pointerEvents="none"
+        onLayout={(e) => {
+          const h = e.nativeEvent.layout.height;
+          if (h > 0 && h !== contentHeight) setContentHeight(h);
+        }}
+      >
+        <FooterContent {...sharedProps} />
+      </View>
+
+      <Animated.View style={{ opacity: anim }}>
+        <FooterContent {...sharedProps} />
+      </Animated.View>
+    </Animated.View>
+  );
+}
+
+function FooterContent({
+  totalQty,
+  subtotal,
+  cartEmpty,
+  onPayCash,
+  onPayMpesa,
+  onCloseShift,
   formatCurrency,
   bottomInset,
   c,
@@ -259,37 +557,39 @@ export function PosFooter({
 }) {
   return (
     <View style={[styles.footer, { paddingBottom: Math.max(bottomInset, 10) }]}>
-      <View style={styles.footerTop}>
-        <View>
-          <Text style={styles.footerKicker}>
-            {totalQty} {totalQty === 1 ? 'item' : 'items'}
-          </Text>
-          <Text style={styles.footerTotal}>{formatCurrency(subtotal)}</Text>
-        </View>
-        <Pressable
-          onPress={onUndo}
-          disabled={cartEmpty}
-          style={[styles.undoBtn, cartEmpty && styles.payBtnDisabled]}
-        >
-          <Ionicons name="arrow-undo-outline" size={18} color={c.textPrimary} />
-          <Text style={styles.undoText}>Undo</Text>
-        </Pressable>
-      </View>
+      <Pressable
+        onLongPress={onCloseShift}
+        delayLongPress={600}
+        style={styles.footerTop}
+      >
+        <Text style={styles.footerKicker}>
+          {totalQty} {totalQty === 1 ? 'item' : 'items'}
+        </Text>
+        <Text style={styles.footerTotal}>{formatCurrency(subtotal)}</Text>
+      </Pressable>
       <View style={styles.payRow}>
         <Pressable
           onPress={onPayCash}
           disabled={cartEmpty}
           style={[styles.payBtn, cartEmpty && styles.payBtnDisabled]}
         >
-          <Ionicons name="cash-outline" size={20} color="#fff" />
+          <Ionicons name="cash-outline" size={24} color={c.textOnPrimary} />
           <Text style={styles.payBtnText}>Cash</Text>
         </Pressable>
         <Pressable
           onPress={onPayMpesa}
           disabled={cartEmpty}
-          style={[styles.payBtn, styles.payBtnMpesa, cartEmpty && styles.payBtnDisabled]}
+          style={[
+            styles.payBtn,
+            styles.payBtnMpesa,
+            cartEmpty && styles.payBtnDisabled,
+          ]}
         >
-          <Ionicons name="phone-portrait-outline" size={20} color="#fff" />
+          <Ionicons
+            name="phone-portrait-outline"
+            size={24}
+            color={c.textOnPrimary}
+          />
           <Text style={styles.payBtnText}>M-Pesa</Text>
         </Pressable>
       </View>
@@ -297,13 +597,13 @@ export function PosFooter({
   );
 }
 
-/* ── Sale-saved snackbar ────────────────────────────────────── */
+/* ── Snackbar ───────────────────────────────────────────────── */
 
 export function PosSnackbar({ visible, onReceipt, c, styles }) {
   if (!visible) return null;
   return (
     <Pressable onPress={onReceipt} style={styles.snackbar}>
-      <Ionicons name="checkmark-circle" size={20} color={c.success} />
+      <Ionicons name="checkmark-circle" size={20} color={c.primary} />
       <Text style={styles.snackText}>Sale saved</Text>
       <Text style={styles.snackAction}>Receipt</Text>
     </Pressable>

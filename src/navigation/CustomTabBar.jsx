@@ -1,14 +1,4 @@
 // src/navigation/CustomTabBar.jsx
-//
-// Tab bar with a raised plus button. The pop-up arc lives in
-// <ActionsArcOverlay /> above the navigator.
-//
-// Reset behavior:
-//   - Tapping Business (from any tab, or again while on Business)
-//     resets the Business stack to BranchesList.
-//   - Other tabs are single screens — nothing to reset.
-//   - Arc navigations do NOT trigger a reset (they dispatch
-//     `navigate(TAB_BUSINESS, { screen })` directly).
 
 import { useCallback, useEffect } from 'react';
 import {
@@ -35,33 +25,16 @@ const PLUS_SIZE = 52;
 
 const PRIMARY = [
   { name: ROUTES.TAB_HOME, label: 'Home', icon: 'home-outline', active: 'home' },
-  {
-    name: ROUTES.TAB_BUSINESS,
-    label: 'Business',
-    icon: 'storefront-outline',
-    active: 'storefront',
-  },
+  { name: ROUTES.TAB_BUSINESS, label: 'Business', icon: 'storefront-outline', active: 'storefront' },
   { name: ROUTES.TAB_ACTIONS, label: 'Actions', actionsSlot: true },
-  {
-    name: ROUTES.TAB_NOTIFICATIONS,
-    label: 'Alerts',
-    icon: 'notifications-outline',
-    active: 'notifications',
-  },
-  {
-    name: ROUTES.TAB_ACCOUNT,
-    label: 'Account',
-    icon: 'person-circle-outline',
-    active: 'person-circle',
-  },
+  { name: ROUTES.TAB_NOTIFICATIONS, label: 'Alerts', icon: 'notifications-outline', active: 'notifications' },
+  { name: ROUTES.TAB_ACCOUNT, label: 'Account', icon: 'person-circle-outline', active: 'person-circle' },
 ];
 
-/** Reset the Business tab's inner stack back to BranchesList. */
 function resetBusinessTab(navigation) {
   navigation.dispatch(
-    CommonActions.navigate({
-      name: ROUTES.TAB_BUSINESS,
-      params: { screen: ROUTES.BRANCHES_LIST },
+    CommonActions.navigate(ROUTES.TAB_BUSINESS, {
+      screen: ROUTES.BRANCHES_LIST,
     })
   );
 }
@@ -158,9 +131,7 @@ export default function CustomTabBar({ state, navigation }) {
             onPress={() => onTabPress(item, i)}
             accessibilityRole="button"
             accessibilityLabel={
-              showBadge
-                ? `${item.label}, ${unreadCount} unread`
-                : item.label
+              showBadge ? `${item.label}, ${unreadCount} unread` : item.label
             }
             accessibilityState={{ selected: isActive }}
           >
@@ -174,23 +145,17 @@ export default function CustomTabBar({ state, navigation }) {
                 <View
                   style={[
                     styles.badge,
-                    {
-                      backgroundColor: c.primary,
-                      borderColor: c.surface,
-                    },
+                    { backgroundColor: c.primary, borderColor: c.surface },
                   ]}
                 >
-                  <Text style={styles.badgeText}>
+                  <Text style={[styles.badgeText, { color: c.textOnPrimary }]}>
                     {unreadCount > 99 ? '99+' : unreadCount}
                   </Text>
                 </View>
               ) : null}
             </View>
             <Text
-              style={[
-                styles.label,
-                { color: isActive ? c.primary : c.textMuted },
-              ]}
+              style={[styles.label, { color: isActive ? c.primary : c.textMuted }]}
               numberOfLines={1}
             >
               {item.label}
@@ -203,10 +168,7 @@ export default function CustomTabBar({ state, navigation }) {
 }
 
 const styles = StyleSheet.create({
-  bar: {
-    flexDirection: 'row',
-    borderTopWidth: 1,
-  },
+  bar: { flexDirection: 'row', borderTopWidth: 1 },
   slot: {
     flex: 1,
     height: BAR_ROW,
@@ -233,11 +195,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  badgeText: {
-    color: '#FFFFFF',
-    fontSize: 9,
-    fontWeight: '800',
-  },
+  badgeText: { fontSize: 9, fontWeight: '800' },
   label: { fontSize: 11, fontWeight: '700', letterSpacing: 0.2 },
   plus: {
     width: PLUS_SIZE,
