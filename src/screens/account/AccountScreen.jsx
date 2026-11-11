@@ -13,24 +13,28 @@
 //   - Business row is a selector when the user belongs to 2+ orgs.
 //     Tapping opens OrgPickerModal, which calls setActiveOrganization(id).
 //     The whole app context re-fetches on switch.
+//
+// v5:
+//   - ColorPicker rewritten for smooth dragging: no setState per frame,
+//     thumbs are Animated.Values driven directly from PanResponder, and
+//     onChange is throttled (~30 Hz while dragging, flushed on release).
 
-import { useEffect, useMemo, useRef, useState } from 'react';
-import {
-  View,
-  Text,
-  TextInput,
-  TouchableOpacity,
-  Pressable,
-  StyleSheet,
-  ScrollView,
-  Animated,
-  Easing,
-  Alert,
-  Platform,
-  useWindowDimensions,
-  PanResponder,
-} from 'react-native';
-import { useCallback } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+ import {
+   View,
+   Text,
+   TextInput,
+   TouchableOpacity,
+   Pressable,
+   StyleSheet,
+   ScrollView,
+   Animated,
+   Easing,
+   Alert,
+   Platform,
+   useWindowDimensions,
+   PanResponder,
+ } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import * as WebBrowser from 'expo-web-browser';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -56,23 +60,28 @@ const HEX = /^#?[0-9a-fA-F]{6}$/;
 
 const clamp = (n, min, max) => Math.min(max, Math.max(min, n));
 
+function normalizeHex(hex) {
+  if (!hex || typeof hex !== 'string') return '#F04000';
+  const h = hex.replace('#', '').trim();
+  if (h.length === 3)
+    return `#${h
+      .split('')
+      .map((x) => x + x)
+      .join('')}`.toUpperCase();
+  if (h.length === 6) return `#${h}`.toUpperCase();
+  return '#F04000';
+}
+
 function hexToRgb(hex) {
-  const h = String(hex || '').replace('#', '');
-  const s =
-    h.length === 3
-      ? h
-          .split('')
-          .map((x) => x + x)
-          .join('')
-      : h;
-  const n = parseInt(s, 16);
+  const h = normalizeHex(hex).slice(1);
+  const n = parseInt(h, 16);
   if (Number.isNaN(n)) return { r: 240, g: 64, b: 0 };
   return { r: (n >> 16) & 255, g: (n >> 8) & 255, b: n & 255 };
 }
 
 function rgbToHex({ r, g, b }) {
   const to = (v) => clamp(Math.round(v), 0, 255).toString(16).padStart(2, '0');
-  return `#${to(r)}${to(g)}${to(b)}`;
+  return `#${to(r)}${to(g)}${to(b)}`.toUpperCase();
 }
 
 function hsvToHex(h, s, v) {
@@ -110,6 +119,8 @@ function hexToHsv(hex) {
   const s = max === 0 ? 0 : d / max;
   return { h, s, v: max };
 }
+
+/* ── Devices section (unchanged) ───────────────────────────── */
 
 function DevicesSection({ c, styles }) {
   const [state, setState] = useState({
@@ -570,19 +581,8 @@ export default function AccountScreen() {
               value={activeBranch?.name || '—'}
               sub={activeBranch?.address || null}
             />
-                  <Divider styles={styles} />
-{/* <Row
-  c={c}
-  styles={styles}
-  icon="phone-portrait-outline"
-  label="This device"
-  value={Platform.OS === 'ios' ? 'iPhone / iPad' : 'Android'}
-/>
-<Divider styles={styles} />
-<View style={styles.sectionLabelInline}>
-  <Text style={styles.sectionLabelInlineText}>PAIRED DEVICES</Text>
-</View>
-<DevicesSection c={c} styles={styles} /> */}
+            <Divider styles={styles} />
+            {/* <Row ... devices block commented out as before ... /> */}
           </View>
 
           {/* Access */}
@@ -664,111 +664,238 @@ export default function AccountScreen() {
   );
 }
 
-/* ── Colour picker ─────────────────────────────────────────── */
+/* ── Colour picker (v5, performance rewrite) ───────────────── */
+
+const CP_SV_HEIGHT = 170;
+const CP_THUMB = 20;
+const CP_THUMB_R = CP_THUMB / 2;
+const CP_HUE_TRACK_H = 14;
+const CP_HUE_THUMB = 22;
+const CP_HUE_THUMB_R = CP_HUE_THUMB / 2;
 
 function ColorPicker({ c, value, onChange }) {
-  const [hsv, setHsv] = useState(() => hexToHsv(value || '#F04000'));
-  const hsvRef = useRef(hsv);
-  hsvRef.current = hsv;
+  const initial = useMemo(() => hexToHsv(normalizeHex(value)), []);
 
+  // HSV truth lives in a ref — no React re-render during a drag.
+  const hsvRef = useRef(initial);
+
+  // Animated values that drive the thumbs.
+  const svX = useRef(new Animated.Value(0)).current;
+  const svY = useRef(new Animated.Value(0)).current;
+  const hueX = useRef(new Animated.Value(0)).current;
+
+  // Measured sizes.
+  const svDims = useRef({ w: 0, h: CP_SV_HEIGHT });
+  const hueDims = useRef({ w: 0 });
+
+  // The hue gradient background — only state that must re-render.
+  const [hueHex, setHueHex] = useState(() => hsvToHex(initial.h, 1, 1));
+
+  const draggingRef = useRef(false);
+
+  /* Throttled emit so the parent at most re-renders ~30 Hz during drag. */
+  const lastEmitRef = useRef(0);
+  const pendingEmitRef = useRef(null);
+  const emitTimerRef = useRef(null);
+
+  const flushEmit = useCallback(() => {
+    if (emitTimerRef.current) {
+      clearTimeout(emitTimerRef.current);
+      emitTimerRef.current = null;
+    }
+    const pending = pendingEmitRef.current;
+    pendingEmitRef.current = null;
+    if (pending != null) {
+      onChange?.(pending);
+      lastEmitRef.current = Date.now();
+    }
+  }, [onChange]);
+
+  const scheduleEmit = useCallback(
+    (hex) => {
+      const now = Date.now();
+      const since = now - lastEmitRef.current;
+      if (since >= 32) {
+        pendingEmitRef.current = hex;
+        flushEmit();
+      } else {
+        pendingEmitRef.current = hex;
+        if (!emitTimerRef.current) {
+          emitTimerRef.current = setTimeout(
+            flushEmit,
+            Math.max(0, 32 - since)
+          );
+        }
+      }
+    },
+    [flushEmit]
+  );
+
+  useEffect(
+    () => () => {
+      if (emitTimerRef.current) clearTimeout(emitTimerRef.current);
+    },
+    []
+  );
+
+  /* Sync thumbs from hsvRef → Animated values. */
+  const syncThumbs = useCallback(
+    (animated = false) => {
+      const { h, s, v } = hsvRef.current;
+      const { w: svW, h: svH } = svDims.current;
+      const { w: hueW } = hueDims.current;
+      const x = s * svW;
+      const y = (1 - v) * svH;
+      const hx = (h / 360) * hueW;
+
+      if (animated) {
+        Animated.timing(svX, {
+          toValue: x,
+          duration: 120,
+          useNativeDriver: false,
+        }).start();
+        Animated.timing(svY, {
+          toValue: y,
+          duration: 120,
+          useNativeDriver: false,
+        }).start();
+        Animated.timing(hueX, {
+          toValue: hx,
+          duration: 120,
+          useNativeDriver: false,
+        }).start();
+      } else {
+        svX.setValue(x);
+        svY.setValue(y);
+        hueX.setValue(hx);
+      }
+    },
+    [svX, svY, hueX]
+  );
+
+  /* External value sync — never clobber an in-progress drag. */
   useEffect(() => {
-    const currentHex = hsvToHex(
+    if (draggingRef.current) return;
+    const target = normalizeHex(value);
+    const current = hsvToHex(
       hsvRef.current.h,
       hsvRef.current.s,
       hsvRef.current.v
     );
-    if (currentHex.toLowerCase() !== String(value).toLowerCase()) {
-      setHsv(hexToHsv(value));
-    }
+    if (target === current) return;
+    hsvRef.current = hexToHsv(target);
+    setHueHex(hsvToHex(hsvRef.current.h, 1, 1));
+    syncThumbs(true);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [value]);
 
-  const commit = (next) => {
-    setHsv(next);
-    onChange(hsvToHex(next.h, next.s, next.v));
-  };
+  /* SV pan */
+  const svOriginRef = useRef({ x: 0, y: 0 });
+  const svNodeRef = useRef(null);
 
-  const svRef = useRef(null);
-  const svSize = useRef({ w: 1, h: 1 });
-  const svOrigin = useRef({ x: 0, y: 0 });
+  const handleSV = useCallback(
+    (pageX, pageY, originX, originY) => {
+      const { w, h } = svDims.current;
+      if (!w || !h) return;
+      const s = clamp((pageX - originX) / w, 0, 1);
+      const v = clamp(1 - (pageY - originY) / h, 0, 1);
+      hsvRef.current = { ...hsvRef.current, s, v };
 
-  const measureSV = () => {
-    const node = svRef.current;
-    if (!node) return;
-    node.measureInWindow((x, y, w, h) => {
-      svOrigin.current = { x, y };
-      svSize.current = { w: w || 1, h: h || 1 };
-    });
-  };
+      svX.setValue(s * w);
+      svY.setValue((1 - v) * h);
 
-  const handleSV = (pageX, pageY) => {
-    const { x, y } = svOrigin.current;
-    const { w, h } = svSize.current;
-    const s = clamp((pageX - x) / w, 0, 1);
-    const v = clamp(1 - (pageY - y) / h, 0, 1);
-    commit({ ...hsvRef.current, s, v });
-  };
+      scheduleEmit(hsvToHex(hsvRef.current.h, s, v));
+    },
+    [scheduleEmit, svX, svY]
+  );
 
   const svPan = useRef(
-    PanResponder.create({
-      onStartShouldSetPanResponder: () => true,
-      onMoveShouldSetPanResponder: () => true,
-      onPanResponderGrant: (e) =>
-        handleSV(e.nativeEvent.pageX, e.nativeEvent.pageY),
-      onPanResponderMove: (e) =>
-        handleSV(e.nativeEvent.pageX, e.nativeEvent.pageY),
+    createPanResponder({
+      onGrant: (pageX, pageY) => {
+        draggingRef.current = true;
+        svNodeRef.current?.measureInWindow((x, y) => {
+          svOriginRef.current = { x, y };
+          handleSV(pageX, pageY, x, y);
+        });
+      },
+      onMove: (pageX, pageY) => {
+        handleSV(pageX, pageY, svOriginRef.current.x, svOriginRef.current.y);
+      },
+      onRelease: () => {
+        draggingRef.current = false;
+        flushEmit();
+      },
     })
   ).current;
 
-  const hueRef = useRef(null);
-  const hueSize = useRef({ w: 1 });
-  const hueOrigin = useRef({ x: 0 });
+  /* Hue pan */
+  const hueOriginRef = useRef({ x: 0 });
+  const hueNodeRef = useRef(null);
 
-  const measureHue = () => {
-    const node = hueRef.current;
-    if (!node) return;
-    node.measureInWindow((x, _y, w) => {
-      hueOrigin.current = { x };
-      hueSize.current = { w: w || 1 };
-    });
-  };
+  const handleHue = useCallback(
+    (pageX, originX) => {
+      const { w } = hueDims.current;
+      if (!w) return;
+      const h = clamp((pageX - originX) / w, 0, 1) * 360;
+      hsvRef.current = { ...hsvRef.current, h };
 
-  const handleHue = (pageX) => {
-    const { x } = hueOrigin.current;
-    const { w } = hueSize.current;
-    const h = clamp((pageX - x) / w, 0, 1) * 360;
-    commit({ ...hsvRef.current, h });
-  };
+      hueX.setValue((h / 360) * w);
+      setHueHex(hsvToHex(h, 1, 1));
+
+      const { s, v } = hsvRef.current;
+      scheduleEmit(hsvToHex(h, s, v));
+    },
+    [hueX, scheduleEmit]
+  );
 
   const huePan = useRef(
-    PanResponder.create({
-      onStartShouldSetPanResponder: () => true,
-      onMoveShouldSetPanResponder: () => true,
-      onPanResponderGrant: (e) => handleHue(e.nativeEvent.pageX),
-      onPanResponderMove: (e) => handleHue(e.nativeEvent.pageX),
+    createPanResponder({
+      onGrant: (pageX) => {
+        draggingRef.current = true;
+        hueNodeRef.current?.measureInWindow((x) => {
+          hueOriginRef.current = { x };
+          handleHue(pageX, x);
+        });
+      },
+      onMove: (pageX) => {
+        handleHue(pageX, hueOriginRef.current.x);
+      },
+      onRelease: () => {
+        draggingRef.current = false;
+        flushEmit();
+      },
     })
   ).current;
 
-  const [svW, setSvW] = useState(1);
-  const [svH, setSvH] = useState(1);
-  const [hueW, setHueW] = useState(1);
+  /* Layout */
+  const onSVLayout = useCallback(
+    (e) => {
+      const { width, height } = e.nativeEvent.layout;
+      svDims.current = { w: width || 1, h: height || 1 };
+      syncThumbs(false);
+    },
+    [syncThumbs]
+  );
 
-  const hueHex = hsvToHex(hsv.h, 1, 1);
-  const thumbLeft = hsv.s * svW;
-  const thumbTop = (1 - hsv.v) * svH;
-  const hueThumbLeft = (hsv.h / 360) * hueW;
+  const onHueLayout = useCallback(
+    (e) => {
+      const { width } = e.nativeEvent.layout;
+      hueDims.current = { w: width || 1 };
+      syncThumbs(false);
+    },
+    [syncThumbs]
+  );
+
+  const svThumbLeft = Animated.subtract(svX, CP_THUMB_R);
+  const svThumbTop = Animated.subtract(svY, CP_THUMB_R);
+  const hueThumbLeft = Animated.subtract(hueX, CP_HUE_THUMB_R);
 
   return (
     <View style={pickerStyles.wrap}>
+      {/* SV square */}
       <View
-        ref={svRef}
-        onLayout={(e) => {
-          const { width, height } = e.nativeEvent.layout;
-          setSvW(width || 1);
-          setSvH(height || 1);
-          svSize.current = { w: width || 1, h: height || 1 };
-          requestAnimationFrame(measureSV);
-        }}
+        ref={svNodeRef}
+        onLayout={onSVLayout}
         style={[pickerStyles.svWrap, { borderColor: c.border }]}
         {...svPan.panHandlers}
       >
@@ -790,23 +917,19 @@ function ColorPicker({ c, value, onChange }) {
           end={{ x: 0.5, y: 1 }}
           style={StyleSheet.absoluteFill}
         />
-        <View
+        <Animated.View
           pointerEvents="none"
           style={[
             pickerStyles.svThumb,
-            { left: thumbLeft - 9, top: thumbTop - 9 },
+            { left: svThumbLeft, top: svThumbTop },
           ]}
         />
       </View>
 
+      {/* Hue slider */}
       <View
-        ref={hueRef}
-        onLayout={(e) => {
-          const { width } = e.nativeEvent.layout;
-          setHueW(width || 1);
-          hueSize.current = { w: width || 1 };
-          requestAnimationFrame(measureHue);
-        }}
+        ref={hueNodeRef}
+        onLayout={onHueLayout}
         style={pickerStyles.hueWrap}
         {...huePan.panHandlers}
       >
@@ -825,19 +948,34 @@ function ColorPicker({ c, value, onChange }) {
           end={{ x: 1, y: 0.5 }}
           style={pickerStyles.hueTrack}
         />
-        <View
+        <Animated.View
           pointerEvents="none"
-          style={[pickerStyles.hueThumb, { left: hueThumbLeft - 11 }]}
+          style={[pickerStyles.hueThumb, { left: hueThumbLeft }]}
         />
       </View>
     </View>
   );
 }
 
+/* Small helper so both gestures share the same shape. */
+function createPanResponder({ onGrant, onMove, onRelease }) {
+  return PanResponder.create({
+    onStartShouldSetPanResponder: () => true,
+    onMoveShouldSetPanResponder: () => true,
+    onPanResponderTerminationRequest: () => false,
+    onPanResponderGrant: (e) =>
+      onGrant(e.nativeEvent.pageX, e.nativeEvent.pageY),
+    onPanResponderMove: (e) =>
+      onMove(e.nativeEvent.pageX, e.nativeEvent.pageY),
+    onPanResponderRelease: () => onRelease?.(),
+    onPanResponderTerminate: () => onRelease?.(),
+  });
+}
+
 const pickerStyles = StyleSheet.create({
   wrap: { marginTop: 4, marginBottom: 14 },
   svWrap: {
-    height: 170,
+    height: CP_SV_HEIGHT,
     borderRadius: 14,
     overflow: 'hidden',
     marginBottom: 14,
@@ -845,9 +983,9 @@ const pickerStyles = StyleSheet.create({
   },
   svThumb: {
     position: 'absolute',
-    width: 20,
-    height: 20,
-    borderRadius: 10,
+    width: CP_THUMB,
+    height: CP_THUMB,
+    borderRadius: CP_THUMB_R,
     borderWidth: 2.5,
     borderColor: '#FFFFFF',
     shadowColor: '#000',
@@ -857,13 +995,13 @@ const pickerStyles = StyleSheet.create({
     elevation: 4,
   },
   hueWrap: { height: 30, justifyContent: 'center' },
-  hueTrack: { height: 14, borderRadius: 7 },
+  hueTrack: { height: CP_HUE_TRACK_H, borderRadius: CP_HUE_TRACK_H / 2 },
   hueThumb: {
     position: 'absolute',
-    top: 4,
-    width: 22,
-    height: 22,
-    borderRadius: 11,
+    top: (30 - CP_HUE_THUMB) / 2,
+    width: CP_HUE_THUMB,
+    height: CP_HUE_THUMB,
+    borderRadius: CP_HUE_THUMB_R,
     borderWidth: 2.5,
     borderColor: '#FFFFFF',
     shadowColor: '#000',
@@ -971,17 +1109,17 @@ const makeStyles = (c) =>
       height: 800,
       backgroundColor: c.hero,
     },
-sectionLabelInline: {
-  paddingTop: 12,
-  paddingBottom: 4,
-  paddingHorizontal: 4,
-},
-sectionLabelInlineText: {
-  color: c.textMuted,
-  fontSize: 10,
-  fontWeight: '800',
-  letterSpacing: 1.2,
-},
+    sectionLabelInline: {
+      paddingTop: 12,
+      paddingBottom: 4,
+      paddingHorizontal: 4,
+    },
+    sectionLabelInlineText: {
+      color: c.textMuted,
+      fontSize: 10,
+      fontWeight: '800',
+      letterSpacing: 1.2,
+    },
     hero: {
       backgroundColor: c.hero,
       paddingHorizontal: 22,

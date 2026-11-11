@@ -2,6 +2,18 @@
 //
 // FCM registration using the modular API (v22+).
 // v26 removed the namespaced messaging() call entirely.
+//
+// v2:
+//   - Guard (`registeredOrgId`) is only set AFTER successful registration.
+//     The old code set it before permission/token/register, so any transient
+//     failure (permission prompt, cold getToken, network) permanently locked
+//     the device out with "already registered for this org".
+//   - In-flight promise dedupe: concurrent init() calls share one attempt.
+//   - Org switch: previous org's token row is best-effort unregistered on
+//     the server before registering the new one. FCM token itself is kept
+//     (not deleted) so other orgs on the same device keep working.
+//   - registerWithOrg returns the row (or null); init only marks success
+//     when the server accepted it.
 
 import { Platform } from 'react-native';
 import {
@@ -19,7 +31,13 @@ import { api } from './api';
 // Create the messaging instance once.
 const messaging = getMessaging();
 
+/** @type {string|null} org the device is currently registered with */
 let registeredOrgId = null;
+
+/** @type {Promise<string|null>|null} in-flight init() attempt */
+let inflight = null;
+
+/** @type {null | (() => void)} */
 let unsubscribeOnTokenRefresh = null;
 
 function deviceLabel() {
@@ -75,7 +93,39 @@ export async function registerWithOrg(organizationId, token) {
   }
 }
 
+/**
+ * Best-effort removal of this device token from a specific org.
+ * The FCM token itself is NOT deleted — other orgs on the same device
+ * keep working.
+ */
+async function unregisterFromOrg(organizationId) {
+  if (!organizationId) return;
+  try {
+    const token = await getToken(messaging);
+    if (!token) return;
+    await api.delete(
+      `/api/v1/organizations/${organizationId}/kxtill/mobile/devices/${encodeURIComponent(
+        token
+      )}`
+    );
+    console.log('[fcm] unregistered from org:', organizationId);
+  } catch (e) {
+    console.log(
+      '[fcm] unregister failed:',
+      e?.response?.status,
+      e?.response?.data || e?.message
+    );
+  }
+}
+
+/**
+ * Full sign-out / token invalidation. Use this when the user signs out
+ * of ALL orgs on this device. For per-org switches use unregisterFromOrg.
+ */
 export async function unregister() {
+  if (registeredOrgId) {
+    await unregisterFromOrg(registeredOrgId);
+  }
   try {
     const token = await getToken(messaging);
     if (token) {
@@ -89,20 +139,23 @@ export async function unregister() {
     unsubscribeOnTokenRefresh = null;
   }
   registeredOrgId = null;
+  inflight = null;
 }
 
-export async function init(organizationId) {
-  if (!organizationId) {
-    console.log('[fcm] init skipped: no orgId');
-    return null;
-  }
-  if (registeredOrgId === organizationId) {
-    console.log('[fcm] init skipped: already registered for this org');
-    return null;
-  }
-  registeredOrgId = organizationId;
-
+async function runInit(organizationId) {
   console.log('[fcm] init for org:', organizationId);
+
+  // Org switch: clean up the previous org's row for this token first.
+  if (registeredOrgId && registeredOrgId !== organizationId) {
+    console.log(
+      '[fcm] org changed:',
+      registeredOrgId,
+      '→',
+      organizationId
+    );
+    await unregisterFromOrg(registeredOrgId);
+    registeredOrgId = null;
+  }
 
   const granted = await ensurePermission();
   if (!granted) {
@@ -124,10 +177,18 @@ export async function init(organizationId) {
     return null;
   }
 
-  await registerWithOrg(organizationId, token);
+  const registered = await registerWithOrg(organizationId, token);
+  if (!registered) {
+    console.log('[fcm] init aborted: register failed');
+    return null;
+  }
+
+  // ── Success. Commit the guard only now. ─────────────────────
+  registeredOrgId = organizationId;
 
   if (unsubscribeOnTokenRefresh) {
     unsubscribeOnTokenRefresh();
+    unsubscribeOnTokenRefresh = null;
   }
   unsubscribeOnTokenRefresh = onTokenRefresh(messaging, async (newToken) => {
     console.log('[fcm] token refreshed:', newToken.slice(0, 24) + '…');
@@ -135,6 +196,31 @@ export async function init(organizationId) {
   });
 
   return token;
+}
+
+export async function init(organizationId) {
+  if (!organizationId) {
+    console.log('[fcm] init skipped: no orgId');
+    return null;
+  }
+  if (registeredOrgId === organizationId) {
+    console.log('[fcm] init skipped: already registered for this org');
+    return null;
+  }
+  if (inflight) {
+    // Another init() is already running; share its result.
+    return inflight;
+  }
+
+  inflight = (async () => {
+    try {
+      return await runInit(organizationId);
+    } finally {
+      inflight = null;
+    }
+  })();
+
+  return inflight;
 }
 
 export default { init, unregister, registerWithOrg };

@@ -65,9 +65,8 @@ export default function MainTabNavigator() {
         });
         break;
 
-      case 'add-product':
-        goToBusinessScreen(navigationRef.dispatch, ROUTES.PRODUCT_FORM, {
-          mode: 'create',
+      case 'products':
+        goToBusinessScreen(navigationRef.dispatch, ROUTES.INVENTORY, {
           branchId: activeBranch?.id ?? null,
         });
         break;

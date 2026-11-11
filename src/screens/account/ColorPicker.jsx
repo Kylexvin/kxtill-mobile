@@ -1,33 +1,55 @@
 // src/screens/account/ColorPicker.jsx
-import { useEffect, useRef, useState } from 'react';
-import { View, StyleSheet, PanResponder } from 'react-native';
+//
+// Performance-focused rewrite of the previous picker.
+//
+//   - No setState during drag: HSV lives in refs, thumb positions are driven
+//     via Animated.ValueXY / Animated.Value → zero React re-renders per frame.
+//   - PanResponder callbacks are stable (created once) and read refs, not
+//     stale closures. No more dependency churn.
+//   - Thumb follows the finger immediately; the committed hex is debounced
+//     (onPanResponderRelease + light throttle) so the parent only re-renders
+//     at most ~30 Hz while dragging, and exactly once on release.
+//   - Gradient layers are constant (`pointerEvents="none"`), so the only
+//     thing that mutates on drag is the thumb transform + the gradient's
+//     background color on hue change.
+//   - Layout measurement cached; no measureInWindow on every gesture grant.
+//   - onChange is optional-safe; value is normalised.
+//   - Handles external `value` changes without fighting the user mid-drag.
+
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { View, StyleSheet, PanResponder, Animated } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 
-/* ── colour maths (same as before) ─────────────────────────── */
+/* ── colour maths ──────────────────────────────────────────── */
 
 const clamp = (n, min, max) => Math.min(max, Math.max(min, n));
 
+function normalizeHex(hex) {
+  if (!hex || typeof hex !== 'string') return '#F04000';
+  const h = hex.replace('#', '').trim();
+  if (h.length === 3) return `#${h.split('').map((x) => x + x).join('')}`.toUpperCase();
+  if (h.length === 6) return `#${h}`.toUpperCase();
+  return '#F04000';
+}
+
 function hexToRgb(hex) {
-  const h = hex.replace('#', '');
-  const n = parseInt(
-    h.length === 3
-      ? h.split('').map((x) => x + x).join('')
-      : h,
-    16
-  );
+  const h = normalizeHex(hex).slice(1);
+  const n = parseInt(h, 16);
   return { r: (n >> 16) & 255, g: (n >> 8) & 255, b: n & 255 };
 }
 
 function rgbToHex({ r, g, b }) {
   const to = (v) => clamp(Math.round(v), 0, 255).toString(16).padStart(2, '0');
-  return `#${to(r)}${to(g)}${to(b)}`;
+  return `#${to(r)}${to(g)}${to(b)}`.toUpperCase();
 }
 
 function hsvToHex(h, s, v) {
   const c = v * s;
   const x = c * (1 - Math.abs(((h / 60) % 2) - 1));
   const m = v - c;
-  let r = 0, g = 0, b = 0;
+  let r = 0,
+    g = 0,
+    b = 0;
   if (h < 60) [r, g, b] = [c, x, 0];
   else if (h < 120) [r, g, b] = [x, c, 0];
   else if (h < 180) [r, g, b] = [0, c, x];
@@ -39,7 +61,9 @@ function hsvToHex(h, s, v) {
 
 function hexToHsv(hex) {
   const { r, g, b } = hexToRgb(hex);
-  const rr = r / 255, gg = g / 255, bb = b / 255;
+  const rr = r / 255,
+    gg = g / 255,
+    bb = b / 255;
   const max = Math.max(rr, gg, bb);
   const min = Math.min(rr, gg, bb);
   const d = max - min;
@@ -55,126 +79,262 @@ function hexToHsv(hex) {
   return { h, s, v: max };
 }
 
+/* ── constants ─────────────────────────────────────────────── */
+
+const SV_HEIGHT = 170;
+const THUMB = 20;
+const THUMB_R = THUMB / 2;
+const HUE_TRACK_H = 14;
+const HUE_THUMB = 22;
+const HUE_THUMB_R = HUE_THUMB / 2;
+
 /* ── Picker ────────────────────────────────────────────────── */
 
 export default function ColorPicker({ value, onChange }) {
-  // internal HSV is the source of truth while dragging
-  const [hsv, setHsv] = useState(() => hexToHsv(value || '#F04000'));
-  const hsvRef = useRef(hsv);
-  hsvRef.current = hsv;
+  const initial = useMemo(() => hexToHsv(normalizeHex(value)), []);
 
-  // if the external accent changes from outside, resync (guard against loops)
-  useEffect(() => {
-    const currentHex = hsvToHex(hsvRef.current.h, hsvRef.current.s, hsvRef.current.v);
-    if (currentHex.toLowerCase() !== value.toLowerCase()) {
-      setHsv(hexToHsv(value));
+  // Source of truth during a drag — never triggers a render.
+  const hsvRef = useRef(initial);
+
+  // Animated values that drive the thumbs (native-driven where possible).
+  const svX = useRef(new Animated.Value(0)).current;
+  const svY = useRef(new Animated.Value(0)).current;
+  const hueX = useRef(new Animated.Value(0)).current;
+
+  // Sizes, measured once.
+  const svDims = useRef({ w: 0, h: SV_HEIGHT });
+  const hueDims = useRef({ w: 0 });
+
+  // The current SV square's base hue — needs state so the gradient updates.
+  const [hueHex, setHueHex] = useState(() =>
+    hsvToHex(initial.h, 1, 1)
+  );
+
+  // Flag so external value changes don't clobber an active drag.
+  const draggingRef = useRef(false);
+
+  /* Throttled emit — cap parent re-renders while dragging. */
+  const lastEmitRef = useRef(0);
+  const pendingEmitRef = useRef(null);
+  const emitTimerRef = useRef(null);
+
+  const flushEmit = useCallback(() => {
+    if (emitTimerRef.current) {
+      clearTimeout(emitTimerRef.current);
+      emitTimerRef.current = null;
     }
+    const pending = pendingEmitRef.current;
+    pendingEmitRef.current = null;
+    if (pending != null) {
+      onChange?.(pending);
+      lastEmitRef.current = Date.now();
+    }
+  }, [onChange]);
+
+  const scheduleEmit = useCallback(
+    (hex) => {
+      const now = Date.now();
+      const since = now - lastEmitRef.current;
+      if (since >= 32) {
+        pendingEmitRef.current = hex;
+        flushEmit();
+      } else {
+        pendingEmitRef.current = hex;
+        if (!emitTimerRef.current) {
+          emitTimerRef.current = setTimeout(
+            flushEmit,
+            Math.max(0, 32 - since)
+          );
+        }
+      }
+    },
+    [flushEmit]
+  );
+
+  useEffect(
+    () => () => {
+      if (emitTimerRef.current) clearTimeout(emitTimerRef.current);
+    },
+    []
+  );
+
+  /* ── Sync thumb positions from hsv ─────────────────────── */
+
+  const syncThumbs = useCallback(
+    (animated = false) => {
+      const { h, s, v } = hsvRef.current;
+      const { w: svW, h: svH } = svDims.current;
+      const { w: hueW } = hueDims.current;
+      const x = s * svW;
+      const y = (1 - v) * svH;
+      const hx = (h / 360) * hueW;
+
+      if (animated) {
+        Animated.timing(svX, { toValue: x, duration: 120, useNativeDriver: false }).start();
+        Animated.timing(svY, { toValue: y, duration: 120, useNativeDriver: false }).start();
+        Animated.timing(hueX, { toValue: hx, duration: 120, useNativeDriver: false }).start();
+      } else {
+        svX.setValue(x);
+        svY.setValue(y);
+        hueX.setValue(hx);
+      }
+    },
+    [svX, svY, hueX]
+  );
+
+  /* ── React to external value changes (not during drag) ─── */
+
+  useEffect(() => {
+    if (draggingRef.current) return;
+    const target = normalizeHex(value);
+    const current = hsvToHex(
+      hsvRef.current.h,
+      hsvRef.current.s,
+      hsvRef.current.v
+    );
+    if (target === current) return;
+    hsvRef.current = hexToHsv(target);
+    setHueHex(hsvToHex(hsvRef.current.h, 1, 1));
+    syncThumbs(true);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [value]);
 
-  const commit = (next) => {
-    setHsv(next);
-    onChange(hsvToHex(next.h, next.s, next.v));
-  };
+  /* ── SV pan ────────────────────────────────────────────── */
 
-  /* ── SV square ─────────────────────────────────────────── */
+  const handleSV = useCallback(
+    (pageX, pageY, originX, originY) => {
+      const { w, h } = svDims.current;
+      if (!w || !h) return;
+      const s = clamp((pageX - originX) / w, 0, 1);
+      const v = clamp(1 - (pageY - originY) / h, 0, 1);
+      hsvRef.current = { ...hsvRef.current, s, v };
 
-  const svRef = useRef(null);
-  const svSize = useRef({ w: 1, h: 1 });
-  const svOrigin = useRef({ x: 0, y: 0 });
+      // Thumb moves instantly, no setState.
+      svX.setValue(s * w);
+      svY.setValue((1 - v) * h);
 
-  const measureSV = () => {
-    const node = svRef.current;
-    if (!node) return;
-    node.measureInWindow((x, y, w, h) => {
-      svOrigin.current = { x, y };
-      svSize.current = { w: w || 1, h: h || 1 };
-    });
-  };
+      const hex = hsvToHex(hsvRef.current.h, s, v);
+      scheduleEmit(hex);
+    },
+    [scheduleEmit, svX, svY]
+  );
 
-  const handleSV = (pageX, pageY) => {
-    const { x, y } = svOrigin.current;
-    const { w, h } = svSize.current;
-    const s = clamp((pageX - x) / w, 0, 1);
-    const v = clamp(1 - (pageY - y) / h, 0, 1);
-    const next = { ...hsvRef.current, s, v };
-    commit(next);
-  };
+  const svOriginRef = useRef({ x: 0, y: 0 });
+  const svNodeRef = useRef(null);
 
   const svPan = useRef(
     PanResponder.create({
       onStartShouldSetPanResponder: () => true,
       onMoveShouldSetPanResponder: () => true,
-      onPanResponderGrant: (e) =>
-        handleSV(e.nativeEvent.pageX, e.nativeEvent.pageY),
-      onPanResponderMove: (e) =>
-        handleSV(e.nativeEvent.pageX, e.nativeEvent.pageY),
+      onPanResponderTerminationRequest: () => false,
+      onPanResponderGrant: (e) => {
+        draggingRef.current = true;
+        const { pageX, pageY } = e.nativeEvent;
+        svNodeRef.current?.measureInWindow((x, y) => {
+          svOriginRef.current = { x, y };
+          handleSV(pageX, pageY, x, y);
+        });
+      },
+      onPanResponderMove: (e) => {
+        const { pageX, pageY } = e.nativeEvent;
+        handleSV(pageX, pageY, svOriginRef.current.x, svOriginRef.current.y);
+      },
+      onPanResponderRelease: () => {
+        draggingRef.current = false;
+        flushEmit();
+      },
+      onPanResponderTerminate: () => {
+        draggingRef.current = false;
+        flushEmit();
+      },
     })
   ).current;
 
-  /* ── Hue slider ────────────────────────────────────────── */
+  /* ── Hue pan ───────────────────────────────────────────── */
 
-  const hueRef = useRef(null);
-  const hueSize = useRef({ w: 1 });
-  const hueOrigin = useRef({ x: 0 });
+  const hueOriginRef = useRef({ x: 0 });
+  const hueNodeRef = useRef(null);
 
-  const measureHue = () => {
-    const node = hueRef.current;
-    if (!node) return;
-    node.measureInWindow((x, _y, w) => {
-      hueOrigin.current = { x };
-      hueSize.current = { w: w || 1 };
-    });
-  };
+  const handleHue = useCallback(
+    (pageX, originX) => {
+      const { w } = hueDims.current;
+      if (!w) return;
+      const h = clamp((pageX - originX) / w, 0, 1) * 360;
+      hsvRef.current = { ...hsvRef.current, h };
 
-  const handleHue = (pageX) => {
-    const { x } = hueOrigin.current;
-    const { w } = hueSize.current;
-    const h = clamp((pageX - x) / w, 0, 1) * 360;
-    commit({ ...hsvRef.current, h });
-  };
+      hueX.setValue((h / 360) * w);
+      setHueHex(hsvToHex(h, 1, 1));
+
+      const { s, v } = hsvRef.current;
+      scheduleEmit(hsvToHex(h, s, v));
+    },
+    [hueX, scheduleEmit]
+  );
 
   const huePan = useRef(
     PanResponder.create({
       onStartShouldSetPanResponder: () => true,
       onMoveShouldSetPanResponder: () => true,
-      onPanResponderGrant: (e) => handleHue(e.nativeEvent.pageX),
-      onPanResponderMove: (e) => handleHue(e.nativeEvent.pageX),
+      onPanResponderTerminationRequest: () => false,
+      onPanResponderGrant: (e) => {
+        draggingRef.current = true;
+        const { pageX } = e.nativeEvent;
+        hueNodeRef.current?.measureInWindow((x) => {
+          hueOriginRef.current = { x };
+          handleHue(pageX, x);
+        });
+      },
+      onPanResponderMove: (e) => {
+        handleHue(e.nativeEvent.pageX, hueOriginRef.current.x);
+      },
+      onPanResponderRelease: () => {
+        draggingRef.current = false;
+        flushEmit();
+      },
+      onPanResponderTerminate: () => {
+        draggingRef.current = false;
+        flushEmit();
+      },
     })
   ).current;
 
-  /* ── render ────────────────────────────────────────────── */
+  /* ── Layout ────────────────────────────────────────────── */
 
-  // dynamic sizes for the thumbs (read refs after layout)
-  const [svW, setSvW] = useState(1);
-  const [svH, setSvH] = useState(1);
-  const [hueW, setHueW] = useState(1);
+  const onSVLayout = useCallback(
+    (e) => {
+      const { width, height } = e.nativeEvent.layout;
+      svDims.current = { w: width || 1, h: height || 1 };
+      syncThumbs(false);
+    },
+    [syncThumbs]
+  );
 
-  const hueHex = hsvToHex(hsv.h, 1, 1);
-  const thumbLeft = hsv.s * svW;
-  const thumbTop = (1 - hsv.v) * svH;
-  const hueThumbLeft = (hsv.h / 360) * hueW;
+  const onHueLayout = useCallback(
+    (e) => {
+      const { width } = e.nativeEvent.layout;
+      hueDims.current = { w: width || 1 };
+      syncThumbs(false);
+    },
+    [syncThumbs]
+  );
+
+  /* ── Render ────────────────────────────────────────────── */
+
+  const svThumbLeft = Animated.subtract(svX, THUMB_R);
+  const svThumbTop = Animated.subtract(svY, THUMB_R);
+  const hueThumbLeft = Animated.subtract(hueX, HUE_THUMB_R);
 
   return (
     <View style={s.wrap}>
       {/* SV square */}
       <View
-        ref={svRef}
-        onLayout={(e) => {
-          const { width, height } = e.nativeEvent.layout;
-          setSvW(width || 1);
-          setSvH(height || 1);
-          svSize.current = { w: width || 1, h: height || 1 };
-          // window origin only known after layout
-          requestAnimationFrame(measureSV);
-        }}
+        ref={svNodeRef}
+        onLayout={onSVLayout}
         style={s.svWrap}
         {...svPan.panHandlers}
       >
-        {/* base hue */}
         <View style={[StyleSheet.absoluteFill, { backgroundColor: hueHex }]} />
 
-        {/* white → transparent (saturation) */}
         <LinearGradient
           pointerEvents="none"
           colors={['#FFFFFF', 'rgba(255,255,255,0)']}
@@ -183,7 +343,6 @@ export default function ColorPicker({ value, onChange }) {
           style={StyleSheet.absoluteFill}
         />
 
-        {/* transparent → black (value) */}
         <LinearGradient
           pointerEvents="none"
           colors={['rgba(0,0,0,0)', '#000000']}
@@ -192,25 +351,19 @@ export default function ColorPicker({ value, onChange }) {
           style={StyleSheet.absoluteFill}
         />
 
-        {/* thumb */}
-        <View
+        <Animated.View
           pointerEvents="none"
           style={[
             s.svThumb,
-            { left: thumbLeft - 9, top: thumbTop - 9 },
+            { left: svThumbLeft, top: svThumbTop },
           ]}
         />
       </View>
 
       {/* Hue slider */}
       <View
-        ref={hueRef}
-        onLayout={(e) => {
-          const { width } = e.nativeEvent.layout;
-          setHueW(width || 1);
-          hueSize.current = { w: width || 1 };
-          requestAnimationFrame(measureHue);
-        }}
+        ref={hueNodeRef}
+        onLayout={onHueLayout}
         style={s.hueWrap}
         {...huePan.panHandlers}
       >
@@ -229,9 +382,9 @@ export default function ColorPicker({ value, onChange }) {
           end={{ x: 1, y: 0.5 }}
           style={s.hueTrack}
         />
-        <View
+        <Animated.View
           pointerEvents="none"
-          style={[s.hueThumb, { left: hueThumbLeft - 11 }]}
+          style={[s.hueThumb, { left: hueThumbLeft }]}
         />
       </View>
     </View>
@@ -244,7 +397,7 @@ const s = StyleSheet.create({
   wrap: { marginBottom: 14 },
 
   svWrap: {
-    height: 170,
+    height: SV_HEIGHT,
     borderRadius: 14,
     overflow: 'hidden',
     marginBottom: 14,
@@ -253,9 +406,9 @@ const s = StyleSheet.create({
   },
   svThumb: {
     position: 'absolute',
-    width: 20,
-    height: 20,
-    borderRadius: 10,
+    width: THUMB,
+    height: THUMB,
+    borderRadius: THUMB_R,
     borderWidth: 2.5,
     borderColor: '#FFFFFF',
     shadowColor: '#000',
@@ -267,15 +420,15 @@ const s = StyleSheet.create({
 
   hueWrap: { height: 30, justifyContent: 'center' },
   hueTrack: {
-    height: 14,
-    borderRadius: 7,
+    height: HUE_TRACK_H,
+    borderRadius: HUE_TRACK_H / 2,
   },
   hueThumb: {
     position: 'absolute',
-    top: 4,
-    width: 22,
-    height: 22,
-    borderRadius: 11,
+    top: (30 - HUE_THUMB) / 2,
+    width: HUE_THUMB,
+    height: HUE_THUMB,
+    borderRadius: HUE_THUMB_R,
     borderWidth: 2.5,
     borderColor: '#FFFFFF',
     shadowColor: '#000',

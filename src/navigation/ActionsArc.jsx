@@ -27,7 +27,7 @@ export const useBottomInset = () => Math.max(useSafeAreaInsets().bottom, 8);
 
 export const ARC_ITEMS = [
   { id: 'share-receipt', label: 'Share receipt', short: 'Receipt', icon: 'share-social-outline' },
-  { id: 'add-product', label: 'Add product', short: 'Product', icon: 'add-circle-outline' },
+  { id: 'products', label: 'Products', short: 'Products', icon: 'pricetags-outline' },
   { id: 'pos', label: 'POS', short: 'POS', icon: 'cart-outline' },
   { id: 'barcode-tool', label: 'Barcode tool', short: 'Barcode', icon: 'barcode-outline' },
   { id: 'team', label: 'Team', short: 'Team', icon: 'people-outline' },

@@ -1,15 +1,18 @@
 // src/screens/inventory/InventoryScreen.jsx
 //
-// v2 — consumes /inventory/products.
-//   - Server-side filtering (search, status, type, category)
-//   - Server-side pagination (limit/offset)
-//   - Server-side counts → header chips always reflect the whole org,
-//     not the filtered subset
-//   - FlatList virtualization
-//   - Cache per (orgId)
-//   - "Showing X of Y" footer when hasMore
+// v3 — rewrite.
+//   - Single filter object → atomic param changes → single load path
+//   - Header memoized; search owns its own state (no focus loss)
+//   - FilterSheet receives everything it needs (fixes counts crash)
+//   - No double safe-area inset
+//   - Back falls back to BranchHome when nothing to pop
+//   - loadMore guarded against filter-token changes
+//   - Skeleton mirrors real header 1:1 (no overlaps)
+//   - Rows have breathing room under the header
+//   - Pagination, caching, permissions, contexts unchanged
 
 import {
+  memo,
   useCallback,
   useEffect,
   useMemo,
@@ -28,10 +31,7 @@ import {
   Modal,
   ActivityIndicator,
 } from 'react-native';
-import {
-  SafeAreaView,
-  useSafeAreaInsets,
-} from 'react-native-safe-area-context';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Ionicons from '@react-native-vector-icons/ionicons';
 import { useTheme } from '../../styles/ThemeProvider';
 import { spacing, radius } from '../../styles/spacing';
@@ -46,7 +46,7 @@ import { readRow, writeRow } from '../../cache/db';
 
 /* ── cache ─────────────────────────────────────────────────────── */
 
-const cacheKey = (orgId) => `inventory:v2:${orgId}`;
+const cacheKey = (orgId) => `inventory:v3:${orgId}`;
 
 async function readCache(orgId) {
   if (!orgId) return null;
@@ -85,6 +85,14 @@ const TYPE_FILTERS = [
   { id: 'retail', label: 'Retail' },
 ];
 
+const DEFAULT_FILTERS = {
+  search: '',
+  status: 'all',
+  category: 'all',
+  type: 'all',
+  showArchived: false,
+};
+
 /* ── skeleton ──────────────────────────────────────────────────── */
 
 function Sk({ width, height, r = 8, style }) {
@@ -120,66 +128,92 @@ function Sk({ width, height, r = 8, style }) {
 
 function InventorySkeleton({ styles, insets }) {
   return (
-    <SafeAreaView style={styles.safe} edges={['top']}>
-      <View style={[styles.headerCard, { marginTop: insets.top + 8 }]}>
-        <View style={styles.headerTop}>
-          <Sk width={36} height={36} r={18} />
-          <Sk width={80} height={24} r={12} />
-        </View>
-        <Sk width="55%" height={22} r={8} style={{ marginTop: 12 }} />
-        <Sk width="40%" height={13} r={6} style={{ marginTop: 6 }} />
-        <View style={styles.chipRow}>
-          <Sk width="31%" height={32} r={12} />
-          <Sk width="31%" height={32} r={12} />
-          <Sk width="31%" height={32} r={12} />
-        </View>
-        <Sk width="100%" height={44} r={12} style={{ marginTop: 14 }} />
-        <View style={styles.filterRow}>
-          {[0, 1, 2, 3].map((i) => (
-            <Sk key={i} width="23%" height={38} r={12} />
-          ))}
+    <View style={[styles.safe, { paddingTop: insets.top }]}>
+      <View style={styles.skeletonHeaderWrap}>
+        <View style={styles.headerCard}>
+          <View style={styles.headerTop}>
+            <Sk width={36} height={36} r={18} />
+            <Sk width={80} height={24} r={12} />
+          </View>
+          <Sk width="55%" height={22} r={8} style={{ marginTop: 12 }} />
+          <Sk width="40%" height={13} r={6} style={{ marginTop: 6 }} />
+
+          <View style={styles.chipRow}>
+            <View style={styles.statChip}>
+              <Sk width="70%" height={14} r={6} />
+            </View>
+            <View style={styles.statChip}>
+              <Sk width="70%" height={14} r={6} />
+            </View>
+            <View style={styles.statChip}>
+              <Sk width="70%" height={14} r={6} />
+            </View>
+          </View>
+
+          <View style={styles.headerRule} />
+
+          <Sk width="100%" height={40} r={12} />
+
+          <View style={[styles.filterRow, { marginTop: 10 }]}>
+            {[0, 1, 2, 3].map((i) => (
+              <Sk key={i} width="23%" height={36} r={12} />
+            ))}
+          </View>
+
+          <Sk width="100%" height={34} r={12} style={{ marginTop: 8 }} />
         </View>
       </View>
+
       <View style={styles.body}>
         {[0, 1, 2, 3, 4].map((i) => (
-          <View key={i} style={styles.itemCard}>
-            <Sk width={34} height={34} r={10} />
-            <View style={{ flex: 1, gap: 8 }}>
-              <Sk width="60%" height={14} r={6} />
-              <Sk width="35%" height={11} r={5} />
+          <View key={i} style={styles.skeletonRowWrap}>
+            <View style={styles.itemCard}>
+              <Sk width={34} height={34} r={10} />
+              <View style={{ flex: 1, gap: 6 }}>
+                <Sk width="60%" height={14} r={6} />
+                <Sk width="35%" height={11} r={5} />
+              </View>
+              <View style={{ alignItems: 'flex-end', gap: 4 }}>
+                <Sk width={44} height={13} r={5} />
+                <Sk width={52} height={10} r={4} />
+              </View>
             </View>
-            <Sk width={48} height={20} r={6} />
           </View>
         ))}
       </View>
-    </SafeAreaView>
+    </View>
   );
 }
 
-/* ── header ────────────────────────────────────────────────────── */
+/* ── header (memoized; owns search input state) ────────────────── */
 
-function FloatingHeader({
+const Header = memo(function Header({
   c,
   styles,
-  insets,
   orgName,
   counts,
-  searchInput,
-  setSearchInput,
-  statusFilter,
-  setStatusFilter,
+  status,
+  onChangeStatus,
   onOpenFilters,
-  filterCount,
+  activeFilterCount,
   onBack,
   canCreate,
   onCreate,
+  onCommitSearch,
 }) {
+  const [search, setSearch] = useState('');
+
   const inStock = counts?.inStock ?? 0;
   const low = counts?.lowStock ?? 0;
   const out = counts?.outOfStock ?? 0;
 
+  const clearSearch = () => {
+    setSearch('');
+    onCommitSearch('');
+  };
+
   return (
-    <View style={[styles.headerCard, { marginTop: insets.top + 8 }]}>
+    <View style={styles.headerCard}>
       <View pointerEvents="none" style={styles.headerGlow} />
 
       <View style={styles.headerTop}>
@@ -236,16 +270,19 @@ function FloatingHeader({
       <View style={styles.searchWrap}>
         <Ionicons name="search" size={14} color={c.textMuted} />
         <TextInput
-          value={searchInput}
-          onChangeText={setSearchInput}
+          value={search}
+          onChangeText={setSearch}
+          onSubmitEditing={() => onCommitSearch(search)}
+          onBlur={() => onCommitSearch(search)}
           placeholder="Search name, SKU…"
           placeholderTextColor={c.textMuted}
           style={styles.searchInput}
           returnKeyType="search"
           autoCorrect={false}
+          autoCapitalize="none"
         />
-        {searchInput ? (
-          <Pressable onPress={() => setSearchInput('')} hitSlop={8}>
+        {search ? (
+          <Pressable onPress={clearSearch} hitSlop={8}>
             <Ionicons name="close-circle" size={16} color={c.textMuted} />
           </Pressable>
         ) : null}
@@ -253,11 +290,11 @@ function FloatingHeader({
 
       <View style={styles.filterRow}>
         {STATUS_FILTERS.map((f) => {
-          const active = statusFilter === f.id;
+          const active = status === f.id;
           return (
             <Pressable
               key={f.id}
-              onPress={() => setStatusFilter(f.id)}
+              onPress={() => onChangeStatus(f.id)}
               style={[styles.filterPill, active && styles.filterPillActive]}
             >
               <Ionicons
@@ -278,28 +315,25 @@ function FloatingHeader({
       <Pressable onPress={onOpenFilters} style={styles.filterSheetBtn}>
         <Ionicons name="options-outline" size={14} color={c.link} />
         <Text style={styles.filterSheetText}>
-          More filters{filterCount > 0 ? ` (${filterCount})` : ''}
+          More filters{activeFilterCount > 0 ? ` (${activeFilterCount})` : ''}
         </Text>
       </Pressable>
     </View>
   );
-}
+});
 
 /* ── filter sheet ──────────────────────────────────────────────── */
 
-function FilterSheet({
+const FilterSheet = memo(function FilterSheet({
   c,
   styles,
   visible,
   onClose,
-  categoryFilter,
-  setCategoryFilter,
+  counts,
   categories,
-  typeFilter,
-  setTypeFilter,
+  filters,
+  setFilters,
   isPharmacyOrg,
-  showArchived,
-  setShowArchived,
   onClear,
 }) {
   return (
@@ -313,7 +347,7 @@ function FilterSheet({
         style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.4)' }}
         onPress={onClose}
       >
-        <View style={styles.sheet}>
+        <Pressable style={styles.sheet} onPress={() => {}}>
           <View style={styles.sheetHandle} />
           <View style={styles.sheetHeader}>
             <Text style={styles.sheetTitle}>Filters</Text>
@@ -330,14 +364,14 @@ function FilterSheet({
             showsHorizontalScrollIndicator={false}
             contentContainerStyle={{ gap: 6, paddingBottom: 14 }}
             renderItem={({ item: cat }) => {
-              const active = categoryFilter === cat;
+              const active = filters.category === cat;
               const count =
-                cat === 'all'
-                  ? null
-                  : counts?.byCategory?.[cat] ?? null;
+                cat === 'all' ? null : counts?.byCategory?.[cat] ?? null;
               return (
                 <Pressable
-                  onPress={() => setCategoryFilter(cat)}
+                  onPress={() =>
+                    setFilters((f) => ({ ...f, category: cat }))
+                  }
                   style={[
                     styles.filterPill,
                     active && styles.filterPillActive,
@@ -363,11 +397,13 @@ function FilterSheet({
               <Text style={styles.sheetLabel}>TYPE</Text>
               <View style={{ flexDirection: 'row', gap: 8, marginBottom: 14 }}>
                 {TYPE_FILTERS.map((t) => {
-                  const active = typeFilter === t.id;
+                  const active = filters.type === t.id;
                   return (
                     <Pressable
                       key={t.id}
-                      onPress={() => setTypeFilter(t.id)}
+                      onPress={() =>
+                        setFilters((f) => ({ ...f, type: t.id }))
+                      }
                       style={[
                         styles.filterPill,
                         active && styles.filterPillActive,
@@ -390,7 +426,9 @@ function FilterSheet({
           ) : null}
 
           <Pressable
-            onPress={() => setShowArchived(!showArchived)}
+            onPress={() =>
+              setFilters((f) => ({ ...f, showArchived: !f.showArchived }))
+            }
             style={styles.sheetToggle}
           >
             <Text
@@ -399,9 +437,9 @@ function FilterSheet({
               Show archived
             </Text>
             <Ionicons
-              name={showArchived ? 'checkbox' : 'square-outline'}
+              name={filters.showArchived ? 'checkbox' : 'square-outline'}
               size={20}
-              color={showArchived ? c.primary : c.textMuted}
+              color={filters.showArchived ? c.primary : c.textMuted}
             />
           </Pressable>
 
@@ -433,42 +471,32 @@ function FilterSheet({
               </Text>
             </Pressable>
           </View>
-        </View>
+        </Pressable>
       </Pressable>
     </Modal>
   );
-}
+});
 
 /* ── row ───────────────────────────────────────────────────────── */
 
-function ProductRowInner({ p, styles, c, formatCurrency, onPress }) {
-  const status = {
-    label: p.stockStatusLabel,
-    variant:
-      p.stockStatus === 'out-of-stock'
-        ? 'danger'
-        : p.stockStatus === 'low-stock'
-          ? 'warning'
-          : p.stockStatus === 'in-stock'
-            ? 'success'
-            : 'muted',
-    icon:
-      p.stockStatus === 'out-of-stock'
-        ? 'alert-circle'
-        : p.stockStatus === 'low-stock'
-          ? 'warning'
-          : p.stockStatus === 'in-stock'
-            ? 'checkmark-circle'
-            : 'help-circle-outline',
-  };
+const Row = memo(function Row({ p, styles, c, formatCurrency, onPress }) {
   const toneColor =
-    status.variant === 'danger'
+    p.stockStatus === 'out-of-stock'
       ? c.danger
-      : status.variant === 'warning'
+      : p.stockStatus === 'low-stock'
         ? c.warning
-        : status.variant === 'success'
+        : p.stockStatus === 'in-stock'
           ? c.success
           : c.textMuted;
+  const toneIcon =
+    p.stockStatus === 'out-of-stock'
+      ? 'alert-circle'
+      : p.stockStatus === 'low-stock'
+        ? 'warning'
+        : p.stockStatus === 'in-stock'
+          ? 'checkmark-circle'
+          : 'help-circle-outline';
+
   const archived = !p.isActive;
   const unitAbbrev = p.baseUnit?.abbreviation || 'units';
 
@@ -514,18 +542,16 @@ function ProductRowInner({ p, styles, c, formatCurrency, onPress }) {
           {p.totalStock} {unitAbbrev}
         </Text>
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
-          <Ionicons name={status.icon} size={11} color={toneColor} />
+          <Ionicons name={toneIcon} size={11} color={toneColor} />
           <Text style={[styles.itemStatusText, { color: toneColor }]}>
-            {status.label}
+            {p.stockStatusLabel}
           </Text>
         </View>
         <Text style={styles.itemPrice}>{formatCurrency(p.price)}</Text>
       </View>
     </Pressable>
   );
-}
-
-const ProductRow = require('react').memo(ProductRowInner);
+});
 
 /* ── screen ────────────────────────────────────────────────────── */
 
@@ -543,6 +569,7 @@ export default function InventoryScreen({ route, navigation }) {
     [productInstances]
   );
 
+  /* data */
   const [items, setItems] = useState([]);
   const [counts, setCounts] = useState(null);
   const [total, setTotal] = useState(0);
@@ -552,16 +579,19 @@ export default function InventoryScreen({ route, navigation }) {
   const [loadingMore, setLoadingMore] = useState(false);
   const [error, setError] = useState(null);
   const [staleError, setStaleError] = useState(null);
-
-  const [searchInput, setSearchInput] = useState('');
-  const [searchTerm, setSearchTerm] = useState('');
-  const [statusFilter, setStatusFilter] = useState('all');
-  const [categoryFilter, setCategoryFilter] = useState('all');
-  const [typeFilter, setTypeFilter] = useState('all');
-  const [showArchived, setShowArchived] = useState(false);
-  const [showFilters, setShowFilters] = useState(false);
   const [categories, setCategories] = useState([]);
 
+  /* filters — atomic object, debounced */
+  const [filters, setFilters] = useState(DEFAULT_FILTERS);
+  const [debouncedFilters, setDebouncedFilters] = useState(DEFAULT_FILTERS);
+  const [showFilters, setShowFilters] = useState(false);
+
+  useEffect(() => {
+    const t = setTimeout(() => setDebouncedFilters(filters), 300);
+    return () => clearTimeout(t);
+  }, [filters]);
+
+  /* refs */
   const mountedRef = useRef(true);
   const tokenRef = useRef(0);
   const dataRef = useRef([]);
@@ -576,31 +606,21 @@ export default function InventoryScreen({ route, navigation }) {
     dataRef.current = items;
   }, [items]);
 
-  useEffect(() => {
-    const t = setTimeout(() => setSearchTerm(searchInput), 400);
-    return () => clearTimeout(t);
-  }, [searchInput]);
-
+  /* params built from debounced filters */
   const buildParams = useCallback(
-    (offset = 0) => {
+    (offset = 0, f = debouncedFilters) => {
       const params = { limit: PAGE_SIZE, offset };
-      if (searchTerm) params.search = searchTerm;
-      if (statusFilter !== 'all') params.status = statusFilter;
-      if (typeFilter !== 'all' && isPharmacyOrg) params.type = typeFilter;
-      if (categoryFilter !== 'all') params.category = categoryFilter;
-      if (showArchived) params.includeArchived = 'true';
+      if (f.search) params.search = f.search;
+      if (f.status !== 'all') params.status = f.status;
+      if (f.type !== 'all' && isPharmacyOrg) params.type = f.type;
+      if (f.category !== 'all') params.category = f.category;
+      if (f.showArchived) params.includeArchived = 'true';
       return params;
     },
-    [
-      searchTerm,
-      statusFilter,
-      typeFilter,
-      categoryFilter,
-      showArchived,
-      isPharmacyOrg,
-    ]
+    [debouncedFilters, isPharmacyOrg]
   );
 
+  /* load */
   const load = useCallback(
     async (isRefresh = false) => {
       const orgId = activeOrganization?.id;
@@ -613,7 +633,6 @@ export default function InventoryScreen({ route, navigation }) {
       else if (dataRef.current.length === 0) setLoading(true);
       setError(null);
 
-      // Cache hydrate (only if nothing in memory)
       if (!isRefresh && dataRef.current.length === 0) {
         const cached = await readCache(orgId);
         if (mountedRef.current && myToken === tokenRef.current && cached) {
@@ -621,9 +640,7 @@ export default function InventoryScreen({ route, navigation }) {
           setCounts(cached.payload.counts || null);
           setTotal(cached.payload.total || 0);
           setHasMore(cached.payload.hasMore || false);
-          setCategories(
-            Object.keys(cached.payload.counts?.byCategory || {})
-          );
+          setCategories(Object.keys(cached.payload.counts?.byCategory || {}));
           setLoading(false);
         }
       }
@@ -666,23 +683,25 @@ export default function InventoryScreen({ route, navigation }) {
     [activeOrganization?.id, buildParams]
   );
 
+  /* load more — capture token to prevent appending stale page */
   const loadMore = useCallback(async () => {
-    if (loadingMore || !hasMore) return;
-    const orgId = activeOrganization?.id;
-    if (!orgId) return;
+    if (loadingMore || !hasMore || !activeOrganization?.id) return;
+    const myToken = tokenRef.current;
     setLoadingMore(true);
     try {
       const { data } = await api.get(
-        `/api/v1/organizations/${orgId}/kxtill/inventory/products`,
+        `/api/v1/organizations/${activeOrganization.id}/kxtill/inventory/products`,
         { params: buildParams(items.length) }
       );
-      if (!mountedRef.current) return;
+      if (!mountedRef.current || myToken !== tokenRef.current) return;
       setItems((prev) => [...prev, ...(data.items || [])]);
       setHasMore(!!data.hasMore);
     } catch {
-      /* silent — retry on next scroll */
+      /* silent */
     } finally {
-      if (mountedRef.current) setLoadingMore(false);
+      if (mountedRef.current && myToken === tokenRef.current) {
+        setLoadingMore(false);
+      }
     }
   }, [
     loadingMore,
@@ -692,35 +711,52 @@ export default function InventoryScreen({ route, navigation }) {
     items.length,
   ]);
 
+  /* (re)load when debounced filters change OR org changes */
   useEffect(() => {
     load(false);
-  }, [load]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [debouncedFilters, activeOrganization?.id]);
 
+  /* reload on focus (back from ProductForm → new product appears) */
   useEffect(() => {
     const unsub = navigation.addListener('focus', () => load(true));
     return unsub;
   }, [navigation, load]);
 
-  const clearFilters = () => {
-    setSearchInput('');
-    setSearchTerm('');
-    setStatusFilter('all');
-    setCategoryFilter('all');
-    setTypeFilter('all');
-    setShowArchived(false);
-  };
+  /* callbacks */
+  const clearFilters = useCallback(() => setFilters(DEFAULT_FILTERS), []);
 
-  const filterCount =
-    (categoryFilter !== 'all' ? 1 : 0) +
-    (typeFilter !== 'all' && isPharmacyOrg ? 1 : 0) +
-    (showArchived ? 1 : 0);
+  const activeFilterCount =
+    (filters.category !== 'all' ? 1 : 0) +
+    (filters.type !== 'all' && isPharmacyOrg ? 1 : 0) +
+    (filters.showArchived ? 1 : 0);
 
+  const hasActiveFilters =
+    activeFilterCount > 0 || !!filters.search || filters.status !== 'all';
+
+  const onBack = useCallback(() => {
+    if (navigation.canGoBack()) navigation.goBack();
+    else navigation.navigate(ROUTES.BRANCH_HOME);
+  }, [navigation]);
+
+  const onCreate = useCallback(() => {
+    navigation.navigate(ROUTES.PRODUCT_FORM, { mode: 'create' });
+  }, [navigation]);
+
+  const onOpenProduct = useCallback(
+    (p) =>
+      navigation.navigate(ROUTES.PRODUCT_DETAIL, {
+        productId: p.id,
+        product: p,
+      }),
+    [navigation]
+  );
+
+  /* render */
   if (loading && items.length === 0 && !error) {
     return <InventorySkeleton styles={styles} insets={insets} />;
   }
 
-  const hasActiveFilters =
-    filterCount > 0 || !!searchTerm || statusFilter !== 'all';
   const emptyTitle = hasActiveFilters ? 'No products match' : 'No products yet';
   const emptySub = hasActiveFilters
     ? 'Adjust or clear filters to see more.'
@@ -729,7 +765,7 @@ export default function InventoryScreen({ route, navigation }) {
       : 'Ask an owner to add products.';
 
   return (
-    <SafeAreaView style={styles.safe} edges={['top']}>
+    <View style={[styles.safe, { paddingTop: insets.top }]}>
       <FlatList
         data={items}
         keyExtractor={(p) => p.id}
@@ -748,24 +784,22 @@ export default function InventoryScreen({ route, navigation }) {
           />
         }
         ListHeaderComponent={
-          <>
-            <FloatingHeader
+          <View style={styles.listHeaderWrap}>
+            <Header
               c={c}
               styles={styles}
-              insets={insets}
               orgName={activeOrganization?.name}
               counts={counts}
-              searchInput={searchInput}
-              setSearchInput={setSearchInput}
-              statusFilter={statusFilter}
-              setStatusFilter={setStatusFilter}
-              onOpenFilters={() => setShowFilters(true)}
-              filterCount={filterCount}
-              onBack={() => navigation.goBack()}
-              canCreate={canCreate}
-              onCreate={() =>
-                navigation.navigate(ROUTES.PRODUCT_FORM, { mode: 'create' })
+              status={filters.status}
+              onChangeStatus={(id) =>
+                setFilters((f) => ({ ...f, status: id }))
               }
+              onCommitSearch={(s) => setFilters((f) => ({ ...f, search: s }))}
+              onOpenFilters={() => setShowFilters(true)}
+              activeFilterCount={activeFilterCount}
+              onBack={onBack}
+              canCreate={canCreate}
+              onCreate={onCreate}
             />
 
             {staleError ? (
@@ -799,18 +833,11 @@ export default function InventoryScreen({ route, navigation }) {
 
             {items.length === 0 ? (
               <View style={styles.emptyState}>
-                <Ionicons
-                  name="cube-outline"
-                  size={40}
-                  color={c.textMuted}
-                />
+                <Ionicons name="cube-outline" size={40} color={c.textMuted} />
                 <Text style={styles.emptyTitle}>{emptyTitle}</Text>
                 <Text style={styles.emptyText}>{emptySub}</Text>
                 {hasActiveFilters ? (
-                  <Pressable
-                    onPress={clearFilters}
-                    style={styles.clearBtn}
-                  >
+                  <Pressable onPress={clearFilters} style={styles.clearBtn}>
                     <Text style={{ color: c.textOnPrimary, fontWeight: '800' }}>
                       Clear filters
                     </Text>
@@ -818,21 +845,16 @@ export default function InventoryScreen({ route, navigation }) {
                 ) : null}
               </View>
             ) : null}
-          </>
+          </View>
         }
         renderItem={({ item: p }) => (
           <View style={styles.rowWrap}>
-            <ProductRow
+            <Row
               p={p}
               styles={styles}
               c={c}
               formatCurrency={formatCurrency}
-              onPress={() =>
-                navigation.navigate(ROUTES.PRODUCT_DETAIL, {
-                  productId: p.id,
-                  product: p,
-                })
-              }
+              onPress={() => onOpenProduct(p)}
             />
           </View>
         )}
@@ -860,17 +882,14 @@ export default function InventoryScreen({ route, navigation }) {
         styles={styles}
         visible={showFilters}
         onClose={() => setShowFilters(false)}
-        categoryFilter={categoryFilter}
-        setCategoryFilter={setCategoryFilter}
+        counts={counts}
         categories={categories}
-        typeFilter={typeFilter}
-        setTypeFilter={setTypeFilter}
+        filters={filters}
+        setFilters={setFilters}
         isPharmacyOrg={isPharmacyOrg}
-        showArchived={showArchived}
-        setShowArchived={setShowArchived}
         onClear={clearFilters}
       />
-    </SafeAreaView>
+    </View>
   );
 }
 
@@ -879,8 +898,29 @@ export default function InventoryScreen({ route, navigation }) {
 const makeStyles = (c) =>
   StyleSheet.create({
     safe: { flex: 1, backgroundColor: c.background },
-    scroll: { paddingBottom: spacing.xxl },
-    body: { paddingHorizontal: spacing.xl, paddingTop: spacing.md },
+
+    scroll: {
+      paddingBottom: spacing.xxl,
+      paddingTop: 8,
+    },
+
+    listHeaderWrap: {
+      marginBottom: spacing.md,
+    },
+
+    body: {
+      paddingHorizontal: spacing.xl,
+      paddingTop: spacing.md,
+      gap: spacing.sm,
+    },
+
+    skeletonHeaderWrap: {
+      marginTop: 8,
+      marginBottom: spacing.md,
+    },
+    skeletonRowWrap: {
+      marginBottom: 0,
+    },
 
     headerCard: {
       backgroundColor: c.surface,
