@@ -58,6 +58,7 @@
       "@react-native-firebase/app",
       "@react-native-firebase/messaging",
       "expo-sharing",
+      "./plugins/withFirebaseNotificationFix",
       [
         "expo-notifications",
         {
