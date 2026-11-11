@@ -3,17 +3,8 @@
 // KxTill product settings (not organization settings). Reached from
 // Account. Owner only.
 //
-// v3 — floating header + 1:1 skeleton + shared cache:
-//   - Uses the shared cache/cache module (readSettingsCache / writeSettingsCache).
-//     No defensive local loader, no require, no fallback.
-//   - Floating header card: back + monogram + "Owner" chip, identity,
-//     three stat chips (currency / timezone short / template), action strip.
-//   - Skeleton matches header + section cards 1:1. Empty result shows the
-//     real card content, not a shimmer.
-//   - Save bar shows "Saving…" text (no spinner).
-//   - Stale chip on refresh failure; content preserved. Race-token guard.
-//   - Owner gate: still shows the whole screen read-only, not a wall —
-//     so non-owners can see settings without editing them.
+// v4 — refreshSettings() on save so POS/receipts/dashboard pick up
+// currency + receipt changes without waiting for TTL or foreground.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
@@ -40,14 +31,13 @@ import { useTheme } from '../../styles/ThemeProvider';
 import { spacing, radius } from '../../styles/spacing';
 import { typography } from '../../styles/typography';
 import { useOrganizationContext } from '../../context/OrganizationContext';
+import { useSettings } from '../../context/SettingsContext';
 import { usePermissions } from '../../hooks/usePermissions';
 import kxtillSettingsService from '../../services/kxtillSettings.service';
 import {
   readSettingsCache,
   writeSettingsCache,
 } from '../../cache/cache';
-
-/* ── constants ─────────────────────────────────────────────────── */
 
 const CURRENCIES = ['KES', 'USD', 'EUR', 'GBP', 'UGX', 'TZS'];
 const TIMEZONES = [
@@ -87,8 +77,6 @@ const EDITABLE_KEYS = [
   'defaultPaymentMethod',
 ];
 
-/* ── Skeleton primitive ────────────────────────────────────────── */
-
 function Sk({ width, height, r = 8, style }) {
   const pulse = useRef(new Animated.Value(0.45)).current;
   useEffect(() => {
@@ -120,17 +108,13 @@ function Sk({ width, height, r = 8, style }) {
   );
 }
 
-function FieldSkeleton({ styles, withLabel = true }) {
+function FieldSkeleton({ withLabel = true }) {
   return (
     <View style={{ marginBottom: spacing.lg }}>
       {withLabel ? (
         <Sk width={70} height={11} r={5} style={{ marginBottom: 8 }} />
       ) : null}
-      <Sk
-        width="100%"
-        height={44}
-        r={radius.md}
-      />
+      <Sk width="100%" height={44} r={radius.md} />
     </View>
   );
 }
@@ -184,20 +168,32 @@ function HeaderSkeleton({ styles, insets }) {
 function BodySkeleton({ styles }) {
   return (
     <View>
-      <Sk width={100} height={11} r={5} style={{ marginTop: spacing.lg, marginBottom: spacing.sm }} />
+      <Sk
+        width={100}
+        height={11}
+        r={5}
+        style={{ marginTop: spacing.lg, marginBottom: spacing.sm }}
+      />
       <View style={styles.card}>
-        <FieldSkeleton styles={styles} />
-        <FieldSkeleton styles={styles} />
-        <FieldSkeleton styles={styles} />
-        <FieldSkeleton styles={styles} />
+        <FieldSkeleton />
+        <FieldSkeleton />
+        <FieldSkeleton />
+        <FieldSkeleton />
       </View>
 
-      <Sk width={100} height={11} r={5} style={{ marginTop: spacing.xl, marginBottom: spacing.sm }} />
+      <Sk
+        width={100}
+        height={11}
+        r={5}
+        style={{ marginTop: spacing.xl, marginBottom: spacing.sm }}
+      />
       <View style={styles.card}>
-        <FieldSkeleton styles={styles} />
-        <FieldSkeleton styles={styles} />
+        <FieldSkeleton />
+        <FieldSkeleton />
         <Sk width={70} height={11} r={5} style={{ marginBottom: 8 }} />
-        <View style={{ flexDirection: 'row', gap: 6, marginBottom: spacing.lg }}>
+        <View
+          style={{ flexDirection: 'row', gap: 6, marginBottom: spacing.lg }}
+        >
           <Sk width="32%" height={36} r={radius.md} />
           <Sk width="32%" height={36} r={radius.md} />
           <Sk width="32%" height={36} r={radius.md} />
@@ -207,12 +203,17 @@ function BodySkeleton({ styles }) {
         <ToggleSkeleton styles={styles} />
       </View>
 
-      <Sk width={100} height={11} r={5} style={{ marginTop: spacing.xl, marginBottom: spacing.sm }} />
+      <Sk
+        width={100}
+        height={11}
+        r={5}
+        style={{ marginTop: spacing.xl, marginBottom: spacing.sm }}
+      />
       <View style={styles.card}>
-        <FieldSkeleton styles={styles} />
-        <FieldSkeleton styles={styles} />
-        <FieldSkeleton styles={styles} />
-        <FieldSkeleton styles={styles} />
+        <FieldSkeleton />
+        <FieldSkeleton />
+        <FieldSkeleton />
+        <FieldSkeleton />
       </View>
     </View>
   );
@@ -235,8 +236,6 @@ function KxtillSettingsSkeleton({ styles, insets }) {
   );
 }
 
-/* ── Floating header ──────────────────────────────────────────── */
-
 function FloatingHeader({
   c,
   styles,
@@ -251,7 +250,10 @@ function FloatingHeader({
 }) {
   const monogram = (orgName || 'K').trim().charAt(0).toUpperCase();
   const currency = draft?.currency || 'KES';
-  const tz = (draft?.timezone || 'Africa/Nairobi').split('/').pop()?.replace(/_/g, ' ');
+  const tz = (draft?.timezone || 'Africa/Nairobi')
+    .split('/')
+    .pop()
+    ?.replace(/_/g, ' ');
   const template = draft?.receiptTemplate || 'classic';
 
   return (
@@ -321,7 +323,11 @@ function FloatingHeader({
           <Text style={styles.statChipLabel}>timezone</Text>
         </View>
         <View style={styles.statChip}>
-          <Ionicons name="document-text-outline" size={13} color={c.link} />
+          <Ionicons
+            name="document-text-outline"
+            size={13}
+            color={c.link}
+          />
           <Text style={styles.statChipValue} numberOfLines={1}>
             {template}
           </Text>
@@ -333,7 +339,10 @@ function FloatingHeader({
 
       <View style={styles.actionRow}>
         <TouchableOpacity
-          style={[styles.actionPrimary, (!dirty || saving) && { opacity: 0.5 }]}
+          style={[
+            styles.actionPrimary,
+            (!dirty || saving) && { opacity: 0.5 },
+          ]}
           onPress={onSave}
           disabled={!dirty || saving || !isOwner}
           activeOpacity={0.85}
@@ -349,7 +358,11 @@ function FloatingHeader({
           </Text>
         </TouchableOpacity>
         <View style={styles.actionSecondary}>
-          <Ionicons name="information-circle-outline" size={14} color={c.link} />
+          <Ionicons
+            name="information-circle-outline"
+            size={14}
+            color={c.link}
+          />
           <Text style={styles.actionSecondaryText}>
             {dirty ? 'Unsaved changes' : 'All changes saved'}
           </Text>
@@ -359,14 +372,13 @@ function FloatingHeader({
   );
 }
 
-/* ── Screen ───────────────────────────────────────────────────── */
-
 export default function KxtillSettingsScreen() {
   const { theme: c } = useTheme();
   const styles = useMemo(() => makeStyles(c), [c]);
   const insets = useSafeAreaInsets();
   const navigation = useNavigation();
   const { activeOrganization } = useOrganizationContext();
+  const { refreshSettings } = useSettings();
   const { isOwner } = usePermissions();
 
   const [settings, setSettings] = useState(null);
@@ -462,6 +474,9 @@ export default function KxtillSettingsScreen() {
       setSettings(next);
       setDraft(next);
       writeSettingsCache(activeOrganization.id, next);
+      // Refresh shared context so POS / receipts / dashboards pick up
+      // currency, decimals, receipt header etc. without waiting for TTL.
+      refreshSettings().catch(() => {});
     } catch (e) {
       Alert.alert(
         'Could not save',
@@ -472,7 +487,15 @@ export default function KxtillSettingsScreen() {
     } finally {
       setSaving(false);
     }
-  }, [dirty, saving, isOwner, draft, settings, activeOrganization?.id]);
+  }, [
+    dirty,
+    saving,
+    isOwner,
+    draft,
+    settings,
+    activeOrganization?.id,
+    refreshSettings,
+  ]);
 
   const onDiscard = useCallback(() => {
     if (settings) setDraft(settings);
@@ -542,7 +565,6 @@ export default function KxtillSettingsScreen() {
           ) : null}
 
           <View style={styles.body}>
-            {/* Store info */}
             <Text style={styles.sectionLabel}>STORE INFO</Text>
             <View style={styles.card}>
               <FormField
@@ -592,7 +614,6 @@ export default function KxtillSettingsScreen() {
               />
             </View>
 
-            {/* Receipt */}
             <Text style={styles.sectionLabel}>RECEIPT</Text>
             <View style={styles.card}>
               <FormField
@@ -619,7 +640,9 @@ export default function KxtillSettingsScreen() {
                   return (
                     <Pressable
                       key={t.value}
-                      onPress={() => isOwner && setField('receiptTemplate', t.value)}
+                      onPress={() =>
+                        isOwner && setField('receiptTemplate', t.value)
+                      }
                       style={[
                         styles.segItem,
                         active && styles.segItemActive,
@@ -669,7 +692,6 @@ export default function KxtillSettingsScreen() {
               />
             </View>
 
-            {/* General */}
             <Text style={styles.sectionLabel}>GENERAL</Text>
             <View style={styles.card}>
               <Dropdown
@@ -743,9 +765,14 @@ export default function KxtillSettingsScreen() {
   );
 }
 
-/* ── field components ────────────────────────────────────────── */
-
-function FormField({ c, label, value, onChangeText, editable = true, ...rest }) {
+function FormField({
+  c,
+  label,
+  value,
+  onChangeText,
+  editable = true,
+  ...rest
+}) {
   return (
     <View style={{ marginBottom: spacing.lg }}>
       <Text style={[formLabel, { color: c.textMuted }]}>{label}</Text>
@@ -860,8 +887,6 @@ function Dropdown({ c, styles, label, value, options, onChange, disabled }) {
   );
 }
 
-/* ── style atoms ─────────────────────────────────────────────── */
-
 const formLabel = {
   fontSize: 11,
   fontWeight: '800',
@@ -889,7 +914,6 @@ const makeStyles = (c) =>
     scroll: { paddingBottom: spacing.xxl * 2 },
     body: { paddingHorizontal: spacing.xl, paddingTop: spacing.md },
 
-    // Floating header
     headerCard: {
       backgroundColor: c.surface,
       borderWidth: 1,
@@ -1030,7 +1054,6 @@ const makeStyles = (c) =>
       fontWeight: '700',
     },
 
-    // Stale
     staleChip: {
       flexDirection: 'row',
       alignItems: 'center',
@@ -1049,7 +1072,6 @@ const makeStyles = (c) =>
       fontWeight: '600',
     },
 
-    // Sections
     sectionLabel: {
       ...typography.label,
       color: c.textMuted,

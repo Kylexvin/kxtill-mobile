@@ -1,10 +1,8 @@
 // src/screens/branches/barcode/BarcodeScannerScreen.jsx
 //
 // Barcode scanner — camera stays mounted; result slides up as a bottom sheet.
-// Hit:  product name, SKU/category, barcode, stock + price, View product / Scan another.
-// Miss: "Unknown barcode" + Add product (prefills barcode).
-//
-// Uses only modules already in the binary (expo-camera, expo-haptics).
+// Frame is centered on the camera card via an absolute-fill overlay with
+// alignItems/justifyContent center. No padding hacks.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
@@ -48,12 +46,7 @@ const FRAME_W = 280;
 const FRAME_H = 180;
 const CORNER = 34;
 const SHEET_OFFSET = 640;
-// expo-camera scans the WHOLE preview. With the frame visually centered on
-// screen but bounds relative to the camera box, strict region checking
-// rejects valid scans. Keep false for reliability.
 const STRICT_REGION = false;
-
-/* ── helpers ──────────────────────────────────────────────── */
 
 function hapticSuccess() {
   Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(
@@ -74,8 +67,6 @@ function fmtBarcode(code) {
   if (s.length === 8) return `${s.slice(0, 4)} ${s.slice(4)}`;
   return s;
 }
-
-/* ── scan line ─────────────────────────────────────────────── */
 
 function ScanLine({ active, color }) {
   const y = useRef(new Animated.Value(0)).current;
@@ -132,8 +123,6 @@ function ScanLine({ active, color }) {
     />
   );
 }
-
-/* ── corner brackets ───────────────────────────────────────── */
 
 function Corners({ color }) {
   const base = {
@@ -196,8 +185,6 @@ function Corners({ color }) {
   );
 }
 
-/* ── screen ────────────────────────────────────────────────── */
-
 export default function BarcodeScannerScreen({ navigation }) {
   const { theme: c } = useTheme();
   const styles = useMemo(() => makeStyles(c), [c]);
@@ -208,7 +195,7 @@ export default function BarcodeScannerScreen({ navigation }) {
   const [permission, requestPermission] = useCameraPermissions();
   const [scanned, setScanned] = useState(false);
   const [scannedCode, setScannedCode] = useState(null);
-  const [lookupState, setLookupState] = useState('idle'); // idle | loading | hit | miss | error
+  const [lookupState, setLookupState] = useState('idle');
   const [product, setProduct] = useState(null);
   const [error, setError] = useState(null);
   const [manualMode, setManualMode] = useState(false);
@@ -230,7 +217,6 @@ export default function BarcodeScannerScreen({ navigation }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [permission?.granted]);
 
-  // Slide the sheet in/out with the result state.
   useEffect(() => {
     Animated.spring(sheetY, {
       toValue: showResult ? 0 : SHEET_OFFSET,
@@ -304,8 +290,6 @@ export default function BarcodeScannerScreen({ navigation }) {
     ({ data, bounds }) => {
       if (lockRef.current) return;
 
-      // Region check disabled (STRICT_REGION=false). If re-enabled, bounds
-      // are relative to cameraWrap, not the screen overlay.
       if (STRICT_REGION && bounds?.origin && bounds?.size && cam.w && cam.h) {
         const cx = bounds.origin.x + bounds.size.width / 2;
         const cy = bounds.origin.y + bounds.size.height / 2;
@@ -367,8 +351,6 @@ export default function BarcodeScannerScreen({ navigation }) {
     reset();
   };
 
-  /* ── permission gates ────────────────────────────────────── */
-
   if (!permission) {
     return (
       <SafeAreaView style={styles.safe} edges={['top']}>
@@ -409,8 +391,6 @@ export default function BarcodeScannerScreen({ navigation }) {
     );
   }
 
-  /* ── camera + sheet ──────────────────────────────────────── */
-
   const bracketColor = !showResult
     ? BRAND
     : isHit
@@ -419,7 +399,6 @@ export default function BarcodeScannerScreen({ navigation }) {
 
   return (
     <View style={styles.root}>
-      {/* top bar (in flow, not over the camera) */}
       <View style={[styles.topBar, { paddingTop: insets.top + 8 }]}>
         <Pressable
           onPress={() => navigation.goBack()}
@@ -446,7 +425,6 @@ export default function BarcodeScannerScreen({ navigation }) {
         </Pressable>
       </View>
 
-      {/* camera card */}
       <View
         style={styles.cameraWrap}
         onLayout={(e) =>
@@ -478,27 +456,31 @@ export default function BarcodeScannerScreen({ navigation }) {
             ]}
           />
         ) : null}
-      </View>
 
-      {/* Frame overlay — centered on the whole screen */}
-      <View pointerEvents="none" style={styles.frameOverlay}>
-        <View style={styles.scanFrame}>
-          <Corners color={bracketColor} />
-          <ScanLine active={!scanned} color={BRAND} />
+        {/* Frame — truly centered on the camera card */}
+        <View pointerEvents="none" style={styles.centerOverlay}>
+          <View style={styles.scanFrame}>
+            <Corners color={bracketColor} />
+            <ScanLine active={!scanned} color={BRAND} />
+          </View>
         </View>
+
         {!showResult ? (
-          <View style={styles.hintPill}>
-            {lookupState === 'loading' ? (
-              <ActivityIndicator size="small" color="#FFFFFF" />
-            ) : null}
-            <Text style={styles.scanHint}>
-              {lookupState === 'loading' ? 'Looking up…' : 'Point at a barcode'}
-            </Text>
+          <View pointerEvents="none" style={styles.hintOverlay}>
+            <View style={styles.hintPill}>
+              {lookupState === 'loading' ? (
+                <ActivityIndicator size="small" color="#FFFFFF" />
+              ) : null}
+              <Text style={styles.scanHint}>
+                {lookupState === 'loading'
+                  ? 'Looking up…'
+                  : 'Point at a barcode'}
+              </Text>
+            </View>
           </View>
         ) : null}
       </View>
 
-      {/* manual-entry dock (in flow, sheet covers it on result) */}
       <KeyboardAvoidingView
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
         style={[styles.dockWrap, { paddingBottom: insets.bottom + 16 }]}
@@ -553,7 +535,6 @@ export default function BarcodeScannerScreen({ navigation }) {
         )}
       </KeyboardAvoidingView>
 
-      {/* result sheet */}
       <Animated.View
         pointerEvents={showResult ? 'auto' : 'none'}
         style={[
@@ -661,8 +642,6 @@ export default function BarcodeScannerScreen({ navigation }) {
   );
 }
 
-/* ── styles ───────────────────────────────────────────────── */
-
 const makeStyles = (c) =>
   StyleSheet.create({
     root: { flex: 1, backgroundColor: '#000' },
@@ -683,7 +662,6 @@ const makeStyles = (c) =>
       marginBottom: spacing.xl,
     },
 
-    // Permission-state header
     headerRow: {
       flexDirection: 'row',
       alignItems: 'center',
@@ -701,7 +679,6 @@ const makeStyles = (c) =>
       justifyContent: 'center',
     },
 
-    // Camera overlays
     dim: { ...StyleSheet.absoluteFillObject },
     cameraWrap: {
       flex: 1,
@@ -732,16 +709,27 @@ const makeStyles = (c) =>
       justifyContent: 'center',
     },
 
-    // Frame overlay — centered on the screen
-    frameOverlay: {
-      ...StyleSheet.absoluteFillObject,
+    centerOverlay: {
+      position: 'absolute',
+      top: 0,
+      left: 0,
+      right: 0,
+      bottom: 0,
       alignItems: 'center',
       justifyContent: 'center',
-      paddingBottom: 80, // nudge up so it sits between top bar and dock
+    },
+    hintOverlay: {
+      position: 'absolute',
+      top: 0,
+      left: 0,
+      right: 0,
+      bottom: 0,
+      alignItems: 'center',
+      justifyContent: 'flex-end',
+      paddingBottom: 32,
     },
     scanFrame: { width: FRAME_W, height: FRAME_H },
     hintPill: {
-      marginTop: 20,
       flexDirection: 'row',
       alignItems: 'center',
       gap: 8,
@@ -752,7 +740,6 @@ const makeStyles = (c) =>
     },
     scanHint: { color: '#FFFFFF', fontSize: 14, fontWeight: '600' },
 
-    // Manual-entry dock
     dockWrap: {
       paddingHorizontal: spacing.lg,
       paddingTop: 12,
@@ -807,7 +794,6 @@ const makeStyles = (c) =>
       justifyContent: 'center',
     },
 
-    // Result sheet
     sheet: {
       position: 'absolute',
       left: 0,

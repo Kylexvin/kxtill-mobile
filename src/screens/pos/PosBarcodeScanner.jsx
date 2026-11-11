@@ -1,8 +1,8 @@
 // src/screens/pos/PosBarcodeScanner.jsx
 //
-// Inline barcode scanner for the POS. Opens the camera in a modal,
-// scans one code, looks it up locally (server fallback), hands
-// { product, unit } back to the caller, and closes.
+// Inline barcode scanner for the POS. Stays open after a hit so the
+// cashier can keep scanning. On success: haptic + "Added" toast +
+// "Scanning again in…" auto-resume after 700ms. On miss: haptic + error.
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
@@ -17,6 +17,7 @@ import {
   Dimensions,
 } from 'react-native';
 import { CameraView, useCameraPermissions } from 'expo-camera';
+import * as Haptics from 'expo-haptics';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Ionicons from '@react-native-vector-icons/ionicons';
 import { useTheme } from '../../styles/ThemeProvider';
@@ -25,13 +26,14 @@ import { lookupBarcode } from '../../offline/catalogue';
 import { normalizeProduct } from './usePos';
 
 const SCAN_COOLDOWN_MS = 1200;
+const RESUME_AFTER_MS = 900;
 
 const { width: SCREEN_W, height: SCREEN_H } = Dimensions.get('window');
 const FRAME_W = Math.min(SCREEN_W * 0.72, 320);
 const FRAME_H = FRAME_W * 0.66;
 
 const TOP_BAR_H = 56;
-const BOTTOM_BAR_H = 72;
+const BOTTOM_BAR_H = 96;
 
 export default function PosBarcodeScanner({
   visible,
@@ -45,19 +47,28 @@ export default function PosBarcodeScanner({
   const [permission, requestPermission] = useCameraPermissions();
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState(null);
+  const [toast, setToast] = useState(null); // { kind: 'added'|'error'|'miss', label }
   const [torch, setTorch] = useState(false);
   const lastScanRef = useRef({ value: null, at: 0 });
   const scanAnim = useRef(new Animated.Value(0)).current;
+  const toastAnim = useRef(new Animated.Value(0)).current;
+  const resumeTimerRef = useRef(null);
 
+  // Reset everything when the modal opens.
   useEffect(() => {
     if (visible) {
       setBusy(false);
       setStatus(null);
+      setToast(null);
       setTorch(false);
       lastScanRef.current = { value: null, at: 0 };
     }
+    return () => {
+      if (resumeTimerRef.current) clearTimeout(resumeTimerRef.current);
+    };
   }, [visible]);
 
+  // Scan-line animation.
   useEffect(() => {
     if (!visible || busy) return undefined;
     scanAnim.setValue(0);
@@ -81,6 +92,44 @@ export default function PosBarcodeScanner({
     return () => loop.stop();
   }, [visible, busy, scanAnim]);
 
+  // Toast fade-in / auto fade-out.
+  useEffect(() => {
+    if (!toast) {
+      toastAnim.setValue(0);
+      return undefined;
+    }
+    toastAnim.setValue(0);
+    Animated.timing(toastAnim, {
+      toValue: 1,
+      duration: 180,
+      useNativeDriver: true,
+    }).start();
+    const t = setTimeout(() => {
+      Animated.timing(toastAnim, {
+        toValue: 0,
+        duration: 200,
+        useNativeDriver: true,
+      }).start(() => setToast(null));
+    }, 1200);
+    return () => clearTimeout(t);
+  }, [toast, toastAnim]);
+
+  const buzz = (kind) => {
+    if (kind === 'added') {
+      Haptics.notificationAsync(
+        Haptics.NotificationFeedbackType.Success
+      ).catch(() => {});
+    } else if (kind === 'miss') {
+      Haptics.notificationAsync(
+        Haptics.NotificationFeedbackType.Warning
+      ).catch(() => {});
+    } else {
+      Haptics.notificationAsync(
+        Haptics.NotificationFeedbackType.Error
+      ).catch(() => {});
+    }
+  };
+
   const handleScan = useCallback(
     async ({ data }) => {
       const now = Date.now();
@@ -89,24 +138,45 @@ export default function PosBarcodeScanner({
       lastScanRef.current = { value: data, at: now };
 
       if (!orgId || !branchId) {
-        setStatus('error');
+        buzz('error');
+        setToast({ kind: 'error', label: 'No branch context' });
         return;
       }
+
       setBusy(true);
       setStatus(null);
+
       try {
         const hit = await lookupBarcode(orgId, branchId, data, normalizeProduct);
         if (!hit) {
+          buzz('miss');
           setStatus('not_found');
+          setToast({ kind: 'miss', label: 'Not found' });
           setBusy(false);
           return;
         }
-        onScanned?.(hit); // { product, unit }
+
+        // Success: fire the hit to the caller, then buzz + toast.
+        onScanned?.(hit);
+        buzz('added');
+        setToast({
+          kind: 'added',
+          label: hit?.product?.name || 'Added',
+        });
+
+        // Pause briefly so the user sees the "Added" toast, then resume.
+        resumeTimerRef.current = setTimeout(() => {
+          setBusy(false);
+          // Allow re-scanning the same code immediately after the toast.
+          lastScanRef.current = { value: null, at: 0 };
+        }, RESUME_AFTER_MS);
       } catch (e) {
+        buzz('error');
         const msg = e?.response?.data?.error || e?.message || '';
         if (/not found/i.test(msg)) setStatus('not_found');
         else if (!e?.response) setStatus('offline');
         else setStatus('error');
+        setToast({ kind: 'error', label: 'Lookup failed' });
         setBusy(false);
       }
     },
@@ -115,7 +185,6 @@ export default function PosBarcodeScanner({
 
   if (!visible) return null;
 
-  // Vertical center of the usable area (between top bar and bottom bar).
   const topBarBottom = insets.top + TOP_BAR_H;
   const bottomBarTop = SCREEN_H - (insets.bottom + BOTTOM_BAR_H);
   const usableCenterY = (topBarBottom + bottomBarTop) / 2;
@@ -126,6 +195,14 @@ export default function PosBarcodeScanner({
     inputRange: [0, 1],
     outputRange: [8, FRAME_H - 8],
   });
+
+  // Frame border color reflects toast state.
+  const frameTone =
+    toast?.kind === 'added'
+      ? c.success
+      : toast?.kind === 'miss' || toast?.kind === 'error'
+        ? c.danger
+        : 'rgba(255,255,255,0.35)';
 
   return (
     <Modal
@@ -165,11 +242,8 @@ export default function PosBarcodeScanner({
           </View>
         )}
 
-        {/* Dim overlay: four panels around the cutout so the live camera
-            feed shows through the scan window. */}
         {permission?.granted ? (
           <View pointerEvents="none" style={StyleSheet.absoluteFill}>
-            {/* top dim */}
             <View
               style={{
                 position: 'absolute',
@@ -180,7 +254,6 @@ export default function PosBarcodeScanner({
                 backgroundColor: 'rgba(0,0,0,0.42)',
               }}
             />
-            {/* bottom dim */}
             <View
               style={{
                 position: 'absolute',
@@ -191,7 +264,6 @@ export default function PosBarcodeScanner({
                 backgroundColor: 'rgba(0,0,0,0.42)',
               }}
             />
-            {/* left dim (middle band) */}
             <View
               style={{
                 position: 'absolute',
@@ -202,7 +274,6 @@ export default function PosBarcodeScanner({
                 backgroundColor: 'rgba(0,0,0,0.42)',
               }}
             />
-            {/* right dim (middle band) */}
             <View
               style={{
                 position: 'absolute',
@@ -214,7 +285,6 @@ export default function PosBarcodeScanner({
               }}
             />
 
-            {/* Cutout — no background, camera shows through. */}
             <View
               style={{
                 position: 'absolute',
@@ -224,7 +294,7 @@ export default function PosBarcodeScanner({
                 height: FRAME_H,
                 borderRadius: 16,
                 borderWidth: 1,
-                borderColor: 'rgba(255,255,255,0.35)',
+                borderColor: frameTone,
               }}
             >
               <View style={[styles.corner, styles.cornerTL]} />
@@ -232,7 +302,7 @@ export default function PosBarcodeScanner({
               <View style={[styles.corner, styles.cornerBL]} />
               <View style={[styles.corner, styles.cornerBR]} />
 
-              {!busy ? (
+              {!busy && !toast ? (
                 <Animated.View
                   style={[
                     styles.scanLine,
@@ -242,6 +312,46 @@ export default function PosBarcodeScanner({
               ) : null}
             </View>
           </View>
+        ) : null}
+
+        {/* Toast — sits just above the bottom bar. */}
+        {toast ? (
+          <Animated.View
+            pointerEvents="none"
+            style={[
+              styles.toast,
+              {
+                bottom: insets.bottom + BOTTOM_BAR_H + 12,
+                opacity: toastAnim,
+                transform: [
+                  {
+                    translateY: toastAnim.interpolate({
+                      inputRange: [0, 1],
+                      outputRange: [12, 0],
+                    }),
+                  },
+                ],
+                backgroundColor:
+                  toast.kind === 'added'
+                    ? c.success
+                    : c.danger,
+              },
+            ]}
+          >
+            <Ionicons
+              name={
+                toast.kind === 'added'
+                  ? 'checkmark-circle'
+                  : 'alert-circle'
+              }
+              size={18}
+              color="#fff"
+            />
+            <Text style={styles.toastText} numberOfLines={1}>
+              {toast.kind === 'added' ? 'Added · ' : ''}
+              {toast.label}
+            </Text>
+          </Animated.View>
         ) : null}
 
         {/* Top bar */}
@@ -264,7 +374,12 @@ export default function PosBarcodeScanner({
         </View>
 
         {/* Bottom status */}
-        <View style={[styles.bottomBar, { paddingBottom: insets.bottom + 16 }]}>
+        <View
+          style={[
+            styles.bottomBar,
+            { paddingBottom: insets.bottom + 16 },
+          ]}
+        >
           {busy ? (
             <View style={styles.statusPill}>
               <ActivityIndicator color="#fff" />
@@ -402,6 +517,29 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontWeight: '700',
     textAlign: 'center',
+    flexShrink: 1,
+  },
+
+  toast: {
+    position: 'absolute',
+    alignSelf: 'center',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    borderRadius: 999,
+    maxWidth: '85%',
+    shadowColor: '#000',
+    shadowOpacity: 0.25,
+    shadowRadius: 12,
+    shadowOffset: { width: 0, height: 4 },
+    elevation: 8,
+  },
+  toastText: {
+    color: '#fff',
+    fontSize: 14,
+    fontWeight: '800',
     flexShrink: 1,
   },
 

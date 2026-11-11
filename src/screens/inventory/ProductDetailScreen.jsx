@@ -1,16 +1,7 @@
 // src/screens/inventory/ProductDetailScreen.jsx
 //
-// Product detail — floating header card, matching the app's other
-// detail screens (BranchHome, BranchSales, Receipts, Inventory).
-//
-// Header: back + monogram + stock-status chip · identity · 3 stat chips ·
-// action strip (Edit · Archive/Restore · Share). Actions live in the
-// header, not a sticky footer.
-//
-// Body: PHARMACY (if medicine) · PRICING · BRANCHES (with stock bars).
-//
-// Refetches on focus so edits from ProductForm propagate back. Fetches
-// if route.params.product is missing (deep link / refresh).
+// Full-bleed product detail. No floating card.
+// Barcode rendered via bwip-js toDataURL() + RN <Image>.
 
 import {
   useCallback,
@@ -28,7 +19,8 @@ import {
   Modal,
   ActivityIndicator,
   Animated,
-  Share,
+  Image,
+  PixelRatio,
 } from 'react-native';
 import {
   SafeAreaView,
@@ -36,6 +28,7 @@ import {
 } from 'react-native-safe-area-context';
 import { useFocusEffect } from '@react-navigation/native';
 import Ionicons from '@react-native-vector-icons/ionicons';
+import bwipjs from '@bwip-js/react-native';
 import { useTheme } from '../../styles/ThemeProvider';
 import { spacing, radius } from '../../styles/spacing';
 import { typography } from '../../styles/typography';
@@ -46,56 +39,34 @@ import inventoryService from '../../services/inventory.service';
 import { KXTILL } from '../../constants/permissions';
 import { ROUTES } from '../../constants/routes';
 
-/* ── helpers ──────────────────────────────────────────────── */
+function stockInfo(product) {
+  const bps = Array.isArray(product?.branchProducts)
+    ? product.branchProducts
+    : [];
+  const hasBranches = bps.length > 0;
+  const total = hasBranches
+    ? bps.reduce((s, b) => s + Number(b.stock || 0), 0)
+    : Number(product?.stock ?? product?.totalStock ?? 0);
+  const min = hasBranches
+    ? bps.reduce((s, b) => s + Number(b.minStock || 0), 0)
+    : Number(product?.minStock ?? 0);
 
-function branchNameOf(bp) {
-  return bp?.branchName || bp?.branch?.name || 'Branch';
+  if (total <= 0) {
+    return { tone: 'danger', label: 'Out of stock', total, min, bps };
+  }
+  if (total <= min) {
+    return { tone: 'warning', label: 'Low stock', total, min, bps };
+  }
+  return { tone: 'success', label: 'In stock', total, min, bps };
 }
 
-function branchKeyOf(bp, i) {
-  return bp?.branchId || bp?.branch?.id || bp?.id || `bp-${i}`;
+function pickBarcodeSymbol(barcode) {
+  const s = String(barcode || '');
+  if (/^\d{13}$/.test(s)) return 'ean13';
+  if (/^\d{12}$/.test(s)) return 'upca';
+  if (/^\d{8}$/.test(s)) return 'ean8';
+  return 'code128';
 }
-
-function stockRatio(bp) {
-  const stock = Number(bp?.stock || 0);
-  const min = Number(bp?.minStock || 0);
-  const ceiling = Math.max(min * 2, stock, 10);
-  return Math.min(1, stock / ceiling);
-}
-
-function stockStatusOfProduct(product) {
-  const bps = product?.branchProducts || [];
-  if (bps.length === 0) {
-    return {
-      key: 'no-branch',
-      label: 'No branch',
-      icon: 'help-circle-outline',
-      tone: 'muted',
-    };
-  }
-  const out = bps.filter((b) => Number(b.stock) <= 0).length;
-  const low = bps.filter(
-    (b) =>
-      Number(b.stock) > 0 && Number(b.stock) <= Number(b.minStock || 0)
-  ).length;
-  if (out === bps.length) {
-    return { key: 'out-of-stock', label: 'Out', icon: 'alert-circle', tone: 'danger' };
-  }
-  if (low + out === bps.length) {
-    return { key: 'low-stock', label: 'Low', icon: 'warning', tone: 'warning' };
-  }
-  if (low + out > 0) {
-    return {
-      key: 'low-stock',
-      label: `${low + out}/${bps.length} low`,
-      icon: 'warning',
-      tone: 'warning',
-    };
-  }
-  return { key: 'in-stock', label: 'In stock', icon: 'checkmark-circle', tone: 'success' };
-}
-
-/* ── skeleton ─────────────────────────────────────────────── */
 
 function Sk({ width, height, r = 8, style }) {
   const pulse = useRef(new Animated.Value(0.45)).current;
@@ -131,302 +102,96 @@ function Sk({ width, height, r = 8, style }) {
 function DetailSkeleton({ styles, insets }) {
   return (
     <SafeAreaView style={styles.safe} edges={['top']}>
-      <ScrollView
-        contentContainerStyle={styles.scroll}
-        scrollEnabled={false}
-      >
-        <View style={[styles.headerCard, { marginTop: insets.top + 8 }]}>
-          <View style={styles.headerTop}>
-            <View
-              style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}
-            >
-              <Sk width={36} height={36} r={18} />
-              <Sk width={36} height={36} r={12} />
-            </View>
-            <Sk width={90} height={24} r={12} />
+      <View style={[styles.hero, { paddingTop: insets.top + 20 }]}>
+        <View style={styles.heroTop}>
+          <Sk width={40} height={40} r={20} />
+          <Sk width={90} height={26} r={13} />
+        </View>
+        <Sk width="70%" height={28} r={8} style={{ marginTop: 22 }} />
+        <Sk width="45%" height={14} r={6} style={{ marginTop: 10 }} />
+        <View style={styles.heroStats}>
+          <View style={styles.heroStat}>
+            <Sk width={40} height={11} r={5} />
+            <Sk width={90} height={32} r={8} style={{ marginTop: 10 }} />
           </View>
-          <Sk width="55%" height={22} r={8} style={{ marginTop: 4 }} />
-          <Sk
-            width="40%"
-            height={13}
-            r={6}
-            style={{ marginTop: 6 }}
-          />
-          <View style={styles.chipRow}>
-            <Sk width="31%" height={32} r={12} />
-            <Sk width="31%" height={32} r={12} />
-            <Sk width="31%" height={32} r={12} />
-          </View>
-          <View style={styles.headerRule} />
-          <View style={styles.actionRow}>
-            <Sk width="31%" height={42} r={12} />
-            <Sk width="31%" height={42} r={12} />
-            <Sk width="31%" height={42} r={12} />
+          <View style={styles.heroStat}>
+            <Sk width={40} height={11} r={5} />
+            <Sk width={90} height={32} r={8} style={{ marginTop: 10 }} />
           </View>
         </View>
-
-        <View style={styles.body}>
-          {[0, 1, 2].map((i) => (
-            <View key={i} style={styles.section}>
+      </View>
+      <View style={styles.body}>
+        {[0, 1].map((i) => (
+          <View key={i} style={styles.section}>
+            <Sk width={90} height={11} r={5} style={{ marginBottom: 10 }} />
+            <View style={styles.sectionBody}>
               <Sk
-                width={90}
-                height={11}
-                r={5}
-                style={{ marginBottom: 8 }}
+                width="100%"
+                height={20}
+                r={6}
+                style={{ marginVertical: 4 }}
               />
-              <View style={styles.sectionBody}>
-                <Sk
-                  width="100%"
-                  height={20}
-                  r={6}
-                  style={{ marginVertical: 4 }}
-                />
-                <Sk
-                  width="100%"
-                  height={20}
-                  r={6}
-                  style={{ marginVertical: 4 }}
-                />
-              </View>
+              <Sk
+                width="100%"
+                height={20}
+                r={6}
+                style={{ marginVertical: 4 }}
+              />
             </View>
-          ))}
-        </View>
-      </ScrollView>
+          </View>
+        ))}
+      </View>
     </SafeAreaView>
   );
 }
 
-/* ── header ──────────────────────────────────────────────── */
+/**
+ * Renders a barcode using bwip-js's toDataURL() + RN <Image>.
+ * Returns null while generating or if generation fails.
+ */
+function BarcodeImage({ barcodeValue }) {
+  const [source, setSource] = useState(null);
 
-function FloatingHeader({
-  c,
-  styles,
-  insets,
-  product,
-  isMedicine,
-  archived,
-  status,
-  canUpdate,
-  canDelete,
-  submitting,
-  onBack,
-  onEdit,
-  onArchive,
-  onRestore,
-  onShare,
-}) {
-  const bu = product.baseUnit || {};
-  const ph = product.pharmacyProduct || {};
-  const monogram = (product.name || 'P').trim().charAt(0).toUpperCase();
-  const totalStock = Number(product.totalStock || 0);
-  const branchCount = product.branchProducts?.length || 0;
-  const price = Number(bu.price || product.price || 0);
+  useEffect(() => {
+    let cancelled = false;
+    setSource(null);
+    if (!barcodeValue) return;
 
-  const toneMap = {
-    success: { fg: c.success, bg: c.successSoft || c.primarySoft },
-    warning: { fg: c.warning, bg: c.primarySoft },
-    danger: { fg: c.danger, bg: c.dangerSoft },
-    muted: { fg: c.textMuted, bg: c.surfaceElevated },
-  };
-  const tone = toneMap[status.tone] || toneMap.muted;
+    const symbol = pickBarcodeSymbol(barcodeValue);
+    bwipjs
+      .toDataURL({
+        bcid: symbol,
+        text: String(barcodeValue),
+        scale: 2,
+        height: 10,
+        includetext: true,
+        textxalign: 'center',
+        textsize: 8,
+        paddingwidth: 0,
+        paddingheight: 0,
+        backgroundcolor: '#FFFFFF',
+        barcolor: '#000000',
+      })
+      .then((img) => {
+        if (!cancelled) setSource(img);
+      })
+      .catch(() => {});
 
-  const statusForArchived = archived
-    ? {
-        label: 'Archived',
-        icon: 'archive',
-        fg: c.danger,
-        bg: c.dangerSoft,
-      }
-    : {
-        label: status.label,
-        icon: status.icon,
-        fg: tone.fg,
-        bg: tone.bg,
-      };
+    return () => {
+      cancelled = true;
+    };
+  }, [barcodeValue]);
+
+  if (!source) return null;
 
   return (
-    <View style={[styles.headerCard, { marginTop: insets.top + 8 }]}>
-      <View pointerEvents="none" style={styles.headerGlow} />
-
-      <View style={styles.headerTop}>
-        <View
-          style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}
-        >
-          <Pressable
-            onPress={onBack}
-            hitSlop={10}
-            style={styles.headerIcon}
-            accessibilityRole="button"
-            accessibilityLabel="Back"
-          >
-            <Ionicons
-              name="arrow-back"
-              size={18}
-              color={c.textPrimary}
-            />
-          </Pressable>
-          <View
-            style={[
-              styles.monogramSmall,
-              isMedicine && { backgroundColor: c.primary },
-            ]}
-          >
-            <Text style={styles.monogramSmallText}>{monogram}</Text>
-          </View>
-        </View>
-
-        <View
-          style={[
-            styles.statusChip,
-            { backgroundColor: statusForArchived.bg },
-          ]}
-        >
-          <Ionicons
-            name={statusForArchived.icon}
-            size={11}
-            color={statusForArchived.fg}
-          />
-          <Text
-            style={[styles.statusText, { color: statusForArchived.fg }]}
-          >
-            {statusForArchived.label}
-          </Text>
-        </View>
-      </View>
-
-      <View style={styles.identityRow}>
-        <View style={{ flex: 1, minWidth: 0 }}>
-          <Text style={styles.headerName} numberOfLines={2}>
-            {product.name}
-          </Text>
-          <Text style={styles.headerSub} numberOfLines={1}>
-            {isMedicine ? ph.genericName || 'Medicine' : 'Retail'}
-            {product.category ? ` · ${product.category}` : ''}
-          </Text>
-          {product.sku ? (
-            <Text style={styles.headerSku} numberOfLines={1}>
-              SKU {product.sku}
-            </Text>
-          ) : null}
-        </View>
-      </View>
-
-      <View style={styles.chipRow}>
-        <View style={styles.statChip}>
-          <Ionicons
-            name="cube-outline"
-            size={13}
-            color={tone.fg}
-          />
-          <Text style={[styles.statChipValue, { color: tone.fg }]}>
-            {totalStock}
-          </Text>
-          <Text style={styles.statChipLabel} numberOfLines={1}>
-            {bu.abbreviation || 'units'}
-          </Text>
-        </View>
-        <View style={styles.statChip}>
-          <Ionicons name="pricetag-outline" size={13} color={c.link} />
-          <Text
-            style={styles.statChipValue}
-            numberOfLines={1}
-            adjustsFontSizeToFit
-          >
-            {price}
-          </Text>
-          <Text style={styles.statChipLabel} numberOfLines={1}>
-            price
-          </Text>
-        </View>
-        <View style={styles.statChip}>
-          <Ionicons
-            name="storefront-outline"
-            size={13}
-            color={c.link}
-          />
-          <Text style={styles.statChipValue}>{branchCount}</Text>
-          <Text style={styles.statChipLabel} numberOfLines={1}>
-            branches
-          </Text>
-        </View>
-      </View>
-
-      <View style={styles.headerRule} />
-
-      <View style={styles.actionRow}>
-        {!archived && canUpdate ? (
-          <Pressable
-            onPress={onEdit}
-            style={[styles.actionBtn, { backgroundColor: c.primary }]}
-            accessibilityRole="button"
-          >
-            <Ionicons
-              name="create-outline"
-              size={14}
-              color={c.textOnPrimary}
-            />
-            <Text style={styles.actionPrimaryText}>Edit</Text>
-          </Pressable>
-        ) : null}
-        {!archived && canDelete ? (
-          <Pressable
-            onPress={onArchive}
-            style={[
-              styles.actionBtn,
-              {
-                backgroundColor: c.dangerSoft,
-              },
-            ]}
-            accessibilityRole="button"
-          >
-            <Ionicons name="archive-outline" size={14} color={c.danger} />
-            <Text style={[styles.actionSecondaryText, { color: c.danger }]}>
-              Archive
-            </Text>
-          </Pressable>
-        ) : null}
-        {archived && canUpdate ? (
-          <Pressable
-            onPress={onRestore}
-            disabled={submitting}
-            style={[styles.actionBtn, { backgroundColor: c.primary }]}
-            accessibilityRole="button"
-          >
-            {submitting ? (
-              <ActivityIndicator size="small" color={c.textOnPrimary} />
-            ) : (
-              <>
-                <Ionicons
-                  name="refresh-outline"
-                  size={14}
-                  color={c.textOnPrimary}
-                />
-                <Text style={styles.actionPrimaryText}>Restore</Text>
-              </>
-            )}
-          </Pressable>
-        ) : null}
-        <Pressable
-          onPress={onShare}
-          style={[
-            styles.actionBtn,
-            {
-              backgroundColor: c.surface,
-              borderWidth: 1,
-              borderColor: c.border,
-            },
-          ]}
-          accessibilityRole="button"
-        >
-          <Ionicons name="share-outline" size={14} color={c.link} />
-          <Text style={styles.actionSecondaryText}>Share</Text>
-        </Pressable>
-      </View>
-    </View>
+    <Image
+      source={{ uri: source.uri }}
+      style={{ width: '100%', height: 90 }}
+      resizeMode="contain"
+    />
   );
 }
-
-/* ── screen ───────────────────────────────────────────────── */
 
 export default function ProductDetailScreen({ route, navigation }) {
   const { theme: c } = useTheme();
@@ -437,7 +202,8 @@ export default function ProductDetailScreen({ route, navigation }) {
   const { formatCurrency } = useSettings();
 
   const routeProduct = route.params?.product || null;
-  const routeProductId = route.params?.productId || null;
+  const routeProductId =
+    route.params?.productId || route.params?.product?.id || null;
 
   const [product, setProduct] = useState(routeProduct);
   const [loading, setLoading] = useState(!routeProduct);
@@ -470,7 +236,7 @@ export default function ProductDetailScreen({ route, navigation }) {
   }, [activeOrganization?.id, routeProductId, product?.id]);
 
   useEffect(() => {
-    if (product || !activeOrganization?.id) {
+    if (!activeOrganization?.id) {
       setLoading(false);
       return;
     }
@@ -479,7 +245,7 @@ export default function ProductDetailScreen({ route, navigation }) {
       if (mountedRef.current) setLoading(false);
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeOrganization?.id]);
+  }, [activeOrganization?.id, routeProductId]);
 
   useFocusEffect(
     useCallback(() => {
@@ -509,77 +275,6 @@ export default function ProductDetailScreen({ route, navigation }) {
     }
   };
 
-  const doRestore = async () => {
-    if (!activeOrganization?.id) return;
-    setSubmitting(true);
-    setErr(null);
-    try {
-      await inventoryService.updateProduct(
-        activeOrganization.id,
-        product.id,
-        { isActive: true }
-      );
-      await refetch();
-    } catch (e) {
-      setErr(
-        e?.response?.data?.message ||
-          e?.message ||
-          'Failed to restore'
-      );
-    } finally {
-      setSubmitting(false);
-    }
-  };
-
-  const doShare = async () => {
-    if (!product) return;
-    const bu = product.baseUnit || {};
-    const lines = [];
-    lines.push(product.name);
-    if (product.sku) lines.push(`SKU ${product.sku}`);
-    if (product.category) lines.push(product.category);
-    if (product.pharmacyProduct?.genericName) {
-      lines.push(
-        `${product.pharmacyProduct.genericName}${
-          product.pharmacyProduct.strength
-            ? ` ${product.pharmacyProduct.strength}`
-            : ''
-        }`
-      );
-    }
-    lines.push('');
-    lines.push(
-      `Price: ${formatCurrency(
-        Number(bu.price || product.price || 0)
-      )}`
-    );
-    lines.push(`Unit: ${bu.name || '—'} (${bu.abbreviation || '—'})`);
-    if (product.totalStock != null) {
-      lines.push(
-        `Stock: ${product.totalStock} ${bu.abbreviation || 'u'}`
-      );
-    }
-    if (product.branchProducts?.length) {
-      lines.push('');
-      lines.push('Branches:');
-      for (const bp of product.branchProducts) {
-        lines.push(
-          `• ${branchNameOf(bp)}: ${bp.stock}/${bp.minStock} ${
-            bu.abbreviation || 'u'
-          }`
-        );
-      }
-    }
-    try {
-      await Share.share({
-        title: product.name,
-        message: lines.join('\n'),
-      });
-    } catch {
-      /* user cancelled */
-    }
-  };
-
   if (loading && !product) {
     return <DetailSkeleton styles={styles} insets={insets} />;
   }
@@ -588,19 +283,22 @@ export default function ProductDetailScreen({ route, navigation }) {
     return (
       <SafeAreaView style={styles.safe} edges={['top', 'bottom']}>
         <View style={styles.centered}>
-          <Ionicons
-            name="alert-circle-outline"
-            size={40}
-            color={c.textMuted}
-          />
+          <View style={styles.emptyIcon}>
+            <Ionicons
+              name="alert-circle-outline"
+              size={36}
+              color={c.textMuted}
+            />
+          </View>
           <Text style={styles.emptyTitle}>Product unavailable</Text>
+          <Text style={styles.emptyBody}>
+            It may have been removed or you don't have access.
+          </Text>
           <Pressable
             onPress={() => navigation.goBack()}
             style={styles.primaryBtn}
           >
-            <Text style={{ color: c.textOnPrimary, fontWeight: '800' }}>
-              Close
-            </Text>
+            <Text style={styles.primaryBtnText}>Close</Text>
           </Pressable>
         </View>
       </SafeAreaView>
@@ -611,36 +309,122 @@ export default function ProductDetailScreen({ route, navigation }) {
   const archived = !product.isActive;
   const bu = product.baseUnit || {};
   const ph = product.pharmacyProduct || {};
-  const status = stockStatusOfProduct(product);
+  const stock = stockInfo(product);
+  const price = Number(bu.price || product.price || 0);
+  const cost = Number(bu.cost || product.cost || 0);
+  const barcodeValue = bu.barcode || product.barcode || null;
+
+  const toneFg =
+    stock.tone === 'danger'
+      ? c.danger
+      : stock.tone === 'warning'
+        ? c.warning
+        : c.success;
+  const toneBg =
+    stock.tone === 'danger'
+      ? c.dangerSoft
+      : stock.tone === 'warning'
+        ? c.primarySoft
+        : c.successSoft || c.primarySoft;
 
   return (
     <SafeAreaView style={styles.safe} edges={['top']}>
       <ScrollView
-        contentContainerStyle={styles.scroll}
+        contentContainerStyle={[
+          styles.scroll,
+          { paddingBottom: insets.bottom + 96 },
+        ]}
         showsVerticalScrollIndicator={false}
       >
-        <FloatingHeader
-          c={c}
-          styles={styles}
-          insets={insets}
-          product={product}
-          isMedicine={isMedicine}
-          archived={archived}
-          status={status}
-          canUpdate={canUpdate}
-          canDelete={canDelete}
-          submitting={submitting}
-          onBack={() => navigation.goBack()}
-          onEdit={() =>
-            navigation.navigate(ROUTES.PRODUCT_FORM, {
-              mode: 'edit',
-              product,
-            })
-          }
-          onArchive={() => setShowArchive(true)}
-          onRestore={doRestore}
-          onShare={doShare}
-        />
+        <View style={styles.hero}>
+          <View style={styles.heroTop}>
+            <Pressable
+              onPress={() => navigation.goBack()}
+              hitSlop={12}
+              style={styles.heroBack}
+              accessibilityRole="button"
+              accessibilityLabel="Back"
+            >
+              <Ionicons
+                name="arrow-back"
+                size={20}
+                color={c.textPrimary}
+              />
+            </Pressable>
+            <View style={[styles.statusChip, { backgroundColor: toneBg }]}>
+              <Ionicons name="ellipse" size={8} color={toneFg} />
+              <Text style={[styles.statusText, { color: toneFg }]}>
+                {archived ? 'Archived' : stock.label}
+              </Text>
+            </View>
+          </View>
+
+          <Text style={styles.heroName} numberOfLines={3}>
+            {product.name}
+          </Text>
+          <View style={styles.heroMetaRow}>
+            {isMedicine ? (
+              <View style={styles.heroTag}>
+                <Ionicons
+                  name="medkit-outline"
+                  size={11}
+                  color={c.link}
+                />
+                <Text style={styles.heroTagText}>
+                  {ph.genericName || 'Medicine'}
+                </Text>
+              </View>
+            ) : null}
+            {product.category ? (
+              <View style={styles.heroTag}>
+                <Ionicons
+                  name="pricetag-outline"
+                  size={11}
+                  color={c.link}
+                />
+                <Text style={styles.heroTagText}>
+                  {product.category}
+                </Text>
+              </View>
+            ) : null}
+            {product.sku ? (
+              <View style={styles.heroTag}>
+                <Ionicons
+                  name="barcode-outline"
+                  size={11}
+                  color={c.link}
+                />
+                <Text style={styles.heroTagText}>{product.sku}</Text>
+              </View>
+            ) : null}
+          </View>
+
+          <View style={styles.heroStats}>
+            <View style={styles.heroStat}>
+              <Text style={styles.heroStatLabel}>STOCK</Text>
+              <Text style={[styles.heroStatValue, { color: toneFg }]}>
+                {stock.total}
+                <Text style={styles.heroStatUnit}>
+                  {' '}
+                  {bu.abbreviation || 'units'}
+                </Text>
+              </Text>
+              {stock.min > 0 ? (
+                <Text style={styles.heroStatHint}>min {stock.min}</Text>
+              ) : null}
+            </View>
+            <View style={styles.heroStatDivider} />
+            <View style={styles.heroStat}>
+              <Text style={styles.heroStatLabel}>PRICE</Text>
+              <Text style={styles.heroStatValue} numberOfLines={1}>
+                {formatCurrency(price)}
+              </Text>
+              <Text style={styles.heroStatHint}>
+                {bu.name || 'base unit'}
+              </Text>
+            </View>
+          </View>
+        </View>
 
         {err ? (
           <View style={styles.errBox}>
@@ -650,13 +434,27 @@ export default function ProductDetailScreen({ route, navigation }) {
         ) : null}
 
         <View style={styles.body}>
+          {barcodeValue ? (
+            <View style={styles.barcodeSection}>
+              <Text style={styles.sectionLabel}>BARCODE</Text>
+              <View style={styles.barcodeCard}>
+                <View style={styles.barcodeWrap}>
+                  <BarcodeImage barcodeValue={barcodeValue} />
+                </View>
+                <Text style={styles.barcodeNumber}>{barcodeValue}</Text>
+              </View>
+            </View>
+          ) : null}
+
           {isMedicine ? (
             <Section title="PHARMACY" styles={styles}>
               <Row label="Generic" value={ph.genericName} styles={styles} />
+              <Row label="Brand" value={ph.brandName} styles={styles} />
               <Row label="Strength" value={ph.strength} styles={styles} />
+              <Row label="Dosage" value={ph.dosageForm} styles={styles} />
               <Row
-                label="Dosage form"
-                value={ph.dosageForm}
+                label="Prescription"
+                value={ph.prescriptionCategory}
                 styles={styles}
               />
             </Section>
@@ -664,78 +462,109 @@ export default function ProductDetailScreen({ route, navigation }) {
 
           <Section title="PRICING" styles={styles}>
             <Row
-              label="Base price"
-              value={formatCurrency(
-                Number(bu.price || product.price || 0)
-              )}
+              label="Selling price"
+              value={formatCurrency(price)}
               styles={styles}
             />
             <Row
               label="Cost"
-              value={formatCurrency(
-                Number(bu.cost || product.cost || 0)
-              )}
+              value={cost > 0 ? formatCurrency(cost) : null}
               styles={styles}
             />
             <Row
-              label="Unit"
-              value={`${bu.name || '—'} (${bu.abbreviation || '—'})`}
+              label="Margin"
+              value={
+                price > 0 && cost > 0
+                  ? formatCurrency(price - cost)
+                  : null
+              }
               styles={styles}
             />
+            <Row
+              label="Base unit"
+              value={bu.name || null}
+              styles={styles}
+            />
+            <Row
+              label="Abbreviation"
+              value={bu.abbreviation || null}
+              styles={styles}
+            />
+ 
           </Section>
 
-          <Section
-            title={`BRANCHES (${product.branchProducts?.length || 0})`}
-            styles={styles}
-          >
-            {product.branchProducts?.length ? (
-              product.branchProducts.map((bp, i) => {
-                const out = Number(bp.stock) <= 0;
-                const low =
-                  Number(bp.stock) > 0 &&
-                  Number(bp.stock) <= Number(bp.minStock);
-                const tone = out
-                  ? c.danger
-                  : low
-                    ? c.warning
-                    : c.success;
-                const ratio = stockRatio(bp);
+          {stock.bps.length > 0 ? (
+            <Section
+              title={`BRANCHES (${stock.bps.length})`}
+              styles={styles}
+            >
+              {stock.bps.map((bp, i) => {
+                const s = Number(bp.stock || 0);
+                const m = Number(bp.minStock || 0);
+                const t =
+                  s <= 0 ? c.danger : s <= m ? c.warning : c.success;
                 return (
-                  <View key={branchKeyOf(bp, i)} style={styles.bpRow}>
-                    <View style={styles.bpTop}>
-                      <Text style={styles.bpName} numberOfLines={1}>
-                        {branchNameOf(bp)}
-                      </Text>
-                      <Text style={[styles.bpStock, { color: tone }]}>
-                        {bp.stock}/{bp.minStock}{' '}
+                  <View
+                    key={bp.branchId || i}
+                    style={[
+                      styles.branchRow,
+                      i === stock.bps.length - 1 && styles.lastRow,
+                    ]}
+                  >
+                    <Text style={styles.branchName} numberOfLines={1}>
+                      {bp.branchName || bp.branch?.name || 'Branch'}
+                    </Text>
+                    <Text style={[styles.branchStock, { color: t }]}>
+                      {s}
+                      <Text style={styles.branchStockUnit}>
+                        {' '}
                         {bu.abbreviation || 'u'}
                       </Text>
-                    </View>
-                    <View style={styles.bpBarTrack}>
-                      <View
-                        style={[
-                          styles.bpBarFill,
-                          {
-                            width: `${Math.max(
-                              4,
-                              Math.round(ratio * 100)
-                            )}%`,
-                            backgroundColor: tone,
-                          },
-                        ]}
-                      />
-                    </View>
+                    </Text>
                   </View>
                 );
-              })
-            ) : (
-              <Text style={styles.bpEmpty}>
-                Not stocked in any branch yet.
-              </Text>
-            )}
-          </Section>
+              })}
+            </Section>
+          ) : null}
         </View>
       </ScrollView>
+
+      <View
+        style={[
+          styles.actionBar,
+          { paddingBottom: Math.max(insets.bottom, 12) },
+        ]}
+      >
+        {!archived && canUpdate ? (
+          <Pressable
+            onPress={() =>
+              navigation.navigate(ROUTES.PRODUCT_FORM, {
+                mode: 'edit',
+                product,
+              })
+            }
+            style={[styles.actionBtn, styles.actionBtnPrimary]}
+            accessibilityRole="button"
+          >
+            <Ionicons
+              name="create-outline"
+              size={18}
+              color={c.textOnPrimary}
+            />
+            <Text style={styles.actionBtnPrimaryText}>Edit product</Text>
+          </Pressable>
+        ) : null}
+        {!archived && canDelete ? (
+          <Pressable
+            onPress={() => setShowArchive(true)}
+            style={[styles.actionBtn, styles.actionBtnDanger]}
+            accessibilityRole="button"
+          >
+            <Ionicons name="archive-outline" size={18} color={c.danger} />
+            <Text style={styles.actionBtnDangerText}>Archive</Text>
+          </Pressable>
+        ) : null}
+      </View>
 
       <Modal
         visible={showArchive}
@@ -746,10 +575,7 @@ export default function ProductDetailScreen({ route, navigation }) {
         <View style={styles.modalOverlay}>
           <View style={styles.confirmModal}>
             <View
-              style={[
-                styles.confirmIcon,
-                { backgroundColor: c.dangerSoft },
-              ]}
+              style={[styles.confirmIcon, { backgroundColor: c.dangerSoft }]}
             >
               <Ionicons
                 name="archive-outline"
@@ -761,7 +587,6 @@ export default function ProductDetailScreen({ route, navigation }) {
             <Text style={styles.confirmBody}>
               <Text style={{ fontWeight: '800' }}>{product.name}</Text> will
               be hidden from POS and inventory. Sales history stays intact.
-              You can restore it later.
             </Text>
             <View style={styles.confirmActions}>
               <Pressable
@@ -801,8 +626,6 @@ export default function ProductDetailScreen({ route, navigation }) {
   );
 }
 
-/* ── atoms ────────────────────────────────────────────────── */
-
 function Section({ title, children, styles }) {
   return (
     <View style={styles.section}>
@@ -813,165 +636,128 @@ function Section({ title, children, styles }) {
 }
 
 function Row({ label, value, styles }) {
+  if (!value) return null;
   return (
     <View style={styles.row}>
       <Text style={styles.rowLabel}>{label}</Text>
       <Text style={styles.rowValue} numberOfLines={2}>
-        {value || '—'}
+        {value}
       </Text>
     </View>
   );
 }
 
-/* ── styles ───────────────────────────────────────────────── */
-
 const makeStyles = (c) =>
   StyleSheet.create({
     safe: { flex: 1, backgroundColor: c.background },
-    scroll: { paddingBottom: spacing.xxl },
+    scroll: { paddingBottom: 96 },
     body: { paddingHorizontal: spacing.xl, paddingTop: spacing.md },
 
-    // Floating header
-    headerCard: {
-      backgroundColor: c.surface,
-      borderWidth: 1,
-      borderColor: c.border,
-      borderRadius: radius.xl,
-      padding: spacing.lg,
-      marginHorizontal: spacing.lg,
-      overflow: 'hidden',
-      shadowColor: '#000',
-      shadowOpacity: 0.1,
-      shadowRadius: 20,
-      shadowOffset: { width: 0, height: 8 },
-      elevation: 6,
+    hero: {
+      paddingHorizontal: spacing.xl,
+      paddingTop: 8,
+      paddingBottom: spacing.xl,
+      borderBottomWidth: StyleSheet.hairlineWidth,
+      borderBottomColor: c.border,
+      backgroundColor: c.background,
     },
-    headerGlow: {
-      position: 'absolute',
-      top: -100,
-      right: -80,
-      width: 240,
-      height: 240,
-      borderRadius: 120,
-      backgroundColor: c.primary,
-      opacity: 0.08,
-    },
-    headerTop: {
+    heroTop: {
       flexDirection: 'row',
       alignItems: 'center',
       justifyContent: 'space-between',
-      marginBottom: 14,
     },
-    headerIcon: {
-      width: 36,
-      height: 36,
-      borderRadius: 18,
-      backgroundColor: c.surfaceElevated,
+    heroBack: {
+      width: 40,
+      height: 40,
+      borderRadius: 20,
+      backgroundColor: c.surface,
+      borderWidth: 1,
+      borderColor: c.border,
       alignItems: 'center',
       justifyContent: 'center',
-    },
-    monogramSmall: {
-      width: 36,
-      height: 36,
-      borderRadius: 12,
-      backgroundColor: c.primary,
-      alignItems: 'center',
-      justifyContent: 'center',
-    },
-    monogramSmallText: {
-      color: c.textOnPrimary,
-      fontSize: 15,
-      fontWeight: '900',
     },
     statusChip: {
       flexDirection: 'row',
       alignItems: 'center',
-      gap: 5,
+      gap: 6,
       paddingVertical: 6,
       paddingHorizontal: 12,
       borderRadius: 999,
     },
     statusText: { fontSize: 11, fontWeight: '800', letterSpacing: 0.3 },
 
-    identityRow: {
-      flexDirection: 'row',
-      alignItems: 'flex-end',
-      gap: 12,
-    },
-    headerName: {
+    heroName: {
       color: c.textPrimary,
-      fontSize: 22,
+      fontSize: 26,
+      lineHeight: 32,
       fontWeight: '900',
-      letterSpacing: -0.5,
+      letterSpacing: -0.6,
+      marginTop: 22,
     },
-    headerSub: {
-      color: c.textMuted,
-      fontSize: 13,
-      fontWeight: '600',
-      marginTop: 3,
+    heroMetaRow: {
+      flexDirection: 'row',
+      flexWrap: 'wrap',
+      gap: 6,
+      marginTop: 12,
     },
-    headerSku: {
-      color: c.textSecondary,
-      fontSize: 11,
-      fontWeight: '700',
-      marginTop: 4,
-      fontVariant: ['tabular-nums'],
-    },
-
-    chipRow: { flexDirection: 'row', gap: 8, marginTop: 14 },
-    statChip: {
-      flex: 1,
+    heroTag: {
       flexDirection: 'row',
       alignItems: 'center',
-      justifyContent: 'center',
-      gap: 6,
-      paddingVertical: 8,
-      paddingHorizontal: 6,
-      borderRadius: 12,
-      backgroundColor: c.surfaceElevated,
+      gap: 5,
+      paddingVertical: 5,
+      paddingHorizontal: 10,
+      borderRadius: 999,
+      backgroundColor: c.surface,
+      borderWidth: 1,
+      borderColor: c.border,
     },
-    statChipValue: {
-      color: c.textPrimary,
-      fontSize: 13,
-      fontWeight: '900',
-      fontVariant: ['tabular-nums'],
+    heroTagText: {
+      color: c.textSecondary,
+      fontSize: 12,
+      fontWeight: '700',
     },
-    statChipLabel: {
+
+    heroStats: {
+      flexDirection: 'row',
+      marginTop: 24,
+      paddingTop: 20,
+      borderTopWidth: StyleSheet.hairlineWidth,
+      borderTopColor: c.border,
+    },
+    heroStat: { flex: 1 },
+    heroStatDivider: {
+      width: StyleSheet.hairlineWidth,
+      backgroundColor: c.border,
+      marginHorizontal: spacing.lg,
+    },
+    heroStatLabel: {
       color: c.textMuted,
       fontSize: 10,
+      fontWeight: '800',
+      letterSpacing: 1.4,
+    },
+    heroStatValue: {
+      color: c.textPrimary,
+      fontSize: 24,
+      fontWeight: '900',
+      letterSpacing: -0.6,
+      marginTop: 6,
+      fontVariant: ['tabular-nums'],
+    },
+    heroStatUnit: {
+      color: c.textMuted,
+      fontSize: 13,
+      fontWeight: '700',
+      letterSpacing: 0,
+    },
+    heroStatHint: {
+      color: c.textMuted,
+      fontSize: 11,
       fontWeight: '600',
+      marginTop: 4,
     },
 
-    headerRule: {
-      height: 1,
-      backgroundColor: c.border,
-      marginTop: 16,
-      marginBottom: 14,
-    },
-
-    actionRow: { flexDirection: 'row', gap: 8 },
-    actionBtn: {
-      flex: 1,
-      flexDirection: 'row',
-      alignItems: 'center',
-      justifyContent: 'center',
-      gap: 6,
-      minHeight: 42,
-      borderRadius: 12,
-    },
-    actionPrimaryText: {
-      color: c.textOnPrimary,
-      fontSize: 13,
-      fontWeight: '800',
-    },
-    actionSecondaryText: {
-      color: c.link,
-      fontSize: 13,
-      fontWeight: '800',
-    },
-
-    // Body sections
-    section: { marginTop: spacing.md },
+    section: { marginTop: spacing.lg },
     sectionLabel: {
       ...typography.label,
       color: c.textMuted,
@@ -983,13 +769,13 @@ const makeStyles = (c) =>
       borderRadius: radius.lg,
       borderWidth: 1,
       borderColor: c.border,
-      padding: spacing.md,
+      paddingHorizontal: spacing.md,
     },
     row: {
       flexDirection: 'row',
       justifyContent: 'space-between',
       alignItems: 'center',
-      paddingVertical: 8,
+      paddingVertical: 12,
       borderBottomWidth: StyleSheet.hairlineWidth,
       borderBottomColor: c.border,
     },
@@ -1002,40 +788,58 @@ const makeStyles = (c) =>
       textAlign: 'right',
     },
 
-    bpRow: {
-      paddingVertical: 10,
-      borderBottomWidth: StyleSheet.hairlineWidth,
-      borderBottomColor: c.border,
+    barcodeSection: { marginTop: spacing.lg },
+    barcodeCard: {
+      backgroundColor: c.surface,
+      borderRadius: radius.lg,
+      borderWidth: 1,
+      borderColor: c.border,
+      overflow: 'hidden',
     },
-    bpTop: {
+    barcodeWrap: {
+      backgroundColor: '#FFFFFF',
+      paddingVertical: 22,
+      paddingHorizontal: 16,
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+    barcodeNumber: {
+      color: c.textSecondary,
+      fontSize: 14,
+      fontWeight: '800',
+      letterSpacing: 3,
+      textAlign: 'center',
+      fontVariant: ['tabular-nums'],
+      paddingVertical: 12,
+      borderTopWidth: StyleSheet.hairlineWidth,
+      borderTopColor: c.border,
+      backgroundColor: c.surface,
+    },
+
+    branchRow: {
       flexDirection: 'row',
       justifyContent: 'space-between',
       alignItems: 'center',
-      marginBottom: 6,
+      paddingVertical: 12,
+      borderBottomWidth: StyleSheet.hairlineWidth,
+      borderBottomColor: c.border,
     },
-    bpName: {
+    lastRow: { borderBottomWidth: 0 },
+    branchName: {
+      flex: 1,
       color: c.textPrimary,
       fontSize: 13,
       fontWeight: '600',
-      flex: 1,
     },
-    bpStock: {
-      fontSize: 13,
-      fontWeight: '800',
+    branchStock: {
+      fontSize: 14,
+      fontWeight: '900',
       fontVariant: ['tabular-nums'],
     },
-    bpBarTrack: {
-      height: 4,
-      borderRadius: 2,
-      backgroundColor: c.surfaceElevated,
-      overflow: 'hidden',
-    },
-    bpBarFill: { height: '100%', borderRadius: 2 },
-    bpEmpty: {
+    branchStockUnit: {
       color: c.textMuted,
-      fontSize: 12,
+      fontSize: 11,
       fontWeight: '600',
-      paddingVertical: 6,
     },
 
     errBox: {
@@ -1050,19 +854,86 @@ const makeStyles = (c) =>
     },
     errText: { flex: 1, color: c.danger, fontSize: 13, fontWeight: '600' },
 
+    actionBar: {
+      position: 'absolute',
+      left: 0,
+      right: 0,
+      bottom: 0,
+      flexDirection: 'row',
+      gap: 10,
+      paddingHorizontal: spacing.xl,
+      paddingTop: 12,
+      backgroundColor: c.surface,
+      borderTopWidth: StyleSheet.hairlineWidth,
+      borderTopColor: c.border,
+    },
+    actionBtn: {
+      flex: 1,
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'center',
+      gap: 8,
+      minHeight: 52,
+      borderRadius: 14,
+    },
+    actionBtnPrimary: { backgroundColor: c.primary },
+    actionBtnPrimaryText: {
+      color: c.textOnPrimary,
+      fontSize: 15,
+      fontWeight: '800',
+    },
+    actionBtnDanger: {
+      backgroundColor: c.dangerSoft,
+      flex: 0,
+      paddingHorizontal: 20,
+    },
+    actionBtnDangerText: {
+      color: c.danger,
+      fontSize: 15,
+      fontWeight: '800',
+    },
+
     centered: {
       flex: 1,
       alignItems: 'center',
       justifyContent: 'center',
-      gap: 12,
+      gap: 10,
       padding: spacing.xl,
     },
-    emptyTitle: { color: c.textPrimary, fontSize: 16, fontWeight: '800' },
+    emptyIcon: {
+      width: 72,
+      height: 72,
+      borderRadius: 22,
+      backgroundColor: c.surfaceElevated,
+      alignItems: 'center',
+      justifyContent: 'center',
+      marginBottom: 6,
+    },
+    emptyTitle: {
+      color: c.textPrimary,
+      fontSize: 18,
+      fontWeight: '800',
+      marginTop: 6,
+    },
+    emptyBody: {
+      color: c.textSecondary,
+      fontSize: 14,
+      textAlign: 'center',
+      lineHeight: 20,
+      maxWidth: 280,
+      marginBottom: spacing.md,
+    },
     primaryBtn: {
-      paddingHorizontal: 20,
+      marginTop: 8,
+      paddingHorizontal: 24,
       paddingVertical: 12,
       borderRadius: 12,
       backgroundColor: c.primary,
+    },
+    primaryBtnText: {
+      color: c.textOnPrimary,
+      fontWeight: '800',
+      fontSize: 15,
     },
 
     modalOverlay: {

@@ -13,8 +13,15 @@
 //
 // Hydration gate (monotonic):
 //   - `ready` starts false, flips true exactly once, never back to false.
-//   - `ready` waits for: org list loaded once, org auto-select fired,
-//     branch effect started for the selected org, branch auto-select done.
+//   - `ready` waits for: auth resolved (NOT 'loading'), org list loaded once,
+//     org auto-select settled, branch effect started for the selected org,
+//     branch auto-select done.
+//
+// Persistence safety:
+//   - SecureStore blob is deleted ONLY on a real sign-out
+//     (previous session was signedIn, now signedOut).
+//   - Transient non-signed-in states (loading on cold start, brief flips)
+//     reset in-memory state but do NOT wipe persisted org/branch.
 
 import {
   createContext,
@@ -68,6 +75,7 @@ export function OrganizationProvider({ children }) {
   const [loadingInstances, setLoadingInstances] = useState(false);
   const [error, setError] = useState(null);
   const [ready, setReady] = useState(false);
+  const [orgSelectSettled, setOrgSelectSettled] = useState(false);
 
   const orgAutoSelectDone = useRef(false);
   const branchAutoSelectDone = useRef(false);
@@ -75,9 +83,16 @@ export function OrganizationProvider({ children }) {
   const branchFetchStartedForOrg = useRef(null);
   const pendingBranchIdRef = useRef(null);
 
+  // True once we've reached signedIn in this session. Only a real
+  // signedOut→signedIn transition can wipe persisted org context; a
+  // cold-start 'loading' state must NOT.
+  const wasSignedInRef = useRef(false);
+
   // ── Load organizations ─────────────────────────────────────
   useEffect(() => {
     if (status !== 'signedIn') {
+      // Reset in-memory state unconditionally. This is safe on every
+      // non-signed-in state (loading, signedOut, etc.).
       setOrganizations([]);
       setActiveOrganizationState(null);
       setBranches([]);
@@ -93,10 +108,20 @@ export function OrganizationProvider({ children }) {
       loadedOrgsOnce.current = false;
       branchFetchStartedForOrg.current = null;
       pendingBranchIdRef.current = null;
+      setOrgSelectSettled(false);
       setReady(false);
-      SecureStore.deleteItemAsync(STORAGE_KEY).catch(() => {});
+
+      // Only wipe persisted state on a REAL sign-out.
+      if (wasSignedInRef.current && status === 'signedOut') {
+        SecureStore.deleteItemAsync(STORAGE_KEY).catch(() => {});
+      }
+      if (status === 'signedOut') {
+        wasSignedInRef.current = false;
+      }
       return;
     }
+
+    wasSignedInRef.current = true;
 
     let cancelled = false;
     setLoadingOrgs(true);
@@ -137,35 +162,39 @@ export function OrganizationProvider({ children }) {
     orgAutoSelectDone.current = true;
 
     (async () => {
-      const pairingCtx = consumePairingContext?.();
-      if (pairingCtx?.organizationId) {
-        const found = organizations.find(
-          (o) => o.id === pairingCtx.organizationId
-        );
-        if (found) {
-          setActiveOrganizationState(found);
-          pendingBranchIdRef.current = pairingCtx.branchId || null;
-          await writeStored({
-            organizationId: found.id,
-            branchId: pairingCtx.branchId || undefined,
-          });
-          return;
+      try {
+        const pairingCtx = consumePairingContext?.();
+        if (pairingCtx?.organizationId) {
+          const found = organizations.find(
+            (o) => o.id === pairingCtx.organizationId
+          );
+          if (found) {
+            setActiveOrganizationState(found);
+            pendingBranchIdRef.current = pairingCtx.branchId || null;
+            await writeStored({
+              organizationId: found.id,
+              branchId: pairingCtx.branchId || undefined,
+            });
+            return;
+          }
         }
-      }
 
-      const stored = await readStored();
-      if (stored?.organizationId) {
-        const found = organizations.find(
-          (o) => o.id === stored.organizationId
-        );
-        if (found) {
-          setActiveOrganizationState(found);
-          return;
+        const stored = await readStored();
+        if (stored?.organizationId) {
+          const found = organizations.find(
+            (o) => o.id === stored.organizationId
+          );
+          if (found) {
+            setActiveOrganizationState(found);
+            return;
+          }
         }
-      }
 
-      if (organizations.length === 1) {
-        setActiveOrganizationState(organizations[0]);
+        if (organizations.length === 1) {
+          setActiveOrganizationState(organizations[0]);
+        }
+      } finally {
+        setOrgSelectSettled(true);
       }
     })();
   }, [
@@ -291,18 +320,30 @@ export function OrganizationProvider({ children }) {
   }, [status, activeOrgId]);
 
   // ── Hydration gate (monotonic) ─────────────────────────────
+  //
+  // `ready` is what RootNavigator uses to decide "splash vs route".
+  // It must stay false until auth has RESOLVED (no longer 'loading')
+  // and the org/branch auto-select has completed. If we flip ready
+  // while status === 'loading', RootNavigator shows the org picker
+  // before the persisted org has a chance to restore — which is the
+  // "asked to pick a business every launch" symptom.
   useEffect(() => {
     if (ready) return;
 
+    // Auth still resolving — nothing is decidable yet.
+    if (status === 'loading') return;
+
     if (status !== 'signedIn') {
+      // Definitive signed-out. Nothing to hydrate.
       setReady(true);
       return;
     }
+
     if (!loadedOrgsOnce.current) return;
     if (loadingOrgs || loadingBranches) return;
 
     if (organizations.length > 0 && !activeOrganization) {
-      if (!orgAutoSelectDone.current) return;
+      if (!orgSelectSettled) return;
     }
 
     if (activeOrganization) {
@@ -316,6 +357,7 @@ export function OrganizationProvider({ children }) {
   }, [
     ready,
     status,
+    orgSelectSettled,
     loadingOrgs,
     loadingBranches,
     organizations.length,

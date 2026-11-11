@@ -22,8 +22,7 @@ import { useSettings } from '../../context/SettingsContext';
 import { usePermissionsContext } from '../../context/PermissionsContext';
 import { KXTILL } from '../../constants/permissions';
 import { BRAND_ICONS } from '../../constants/config';
-// M-Pesa brand green — intentional, not a theme token.
-// M-Pesa's identity is green; it must stay green regardless of theme.
+
 const MPESA_GREEN = '#10B981';
 
 import {
@@ -136,10 +135,9 @@ export default function PosScreen() {
   const [snackOpen, setSnackOpen] = useState(false);
   const [scanOpen, setScanOpen] = useState(false);
 
-  // Shift modal state
   const [shiftModal, setShiftModal] = useState({
     open: false,
-    mode: 'open', // 'open' | 'close' | 'blocked-close'
+    mode: 'open',
     shiftId: null,
     shift: null,
   });
@@ -151,7 +149,6 @@ export default function PosScreen() {
 
   const syncStatus = counts.pending > 0 ? 'pending' : 'synced';
 
-  // Loader steps derived from real state — no fake timers.
   const loaderSteps = useMemo(
     () => [
       { label: 'Checking access', done: !permsNotReady },
@@ -165,7 +162,7 @@ export default function PosScreen() {
     if (!snackOpen) return undefined;
     const t = setTimeout(() => setSnackOpen(false), 5000);
     return () => clearTimeout(t);
-  }, [snackOpen, lastSaleId, lastClientId]);
+  }, [snackOpen]);
 
   const categories = useMemo(() => {
     const set = new Set();
@@ -267,8 +264,6 @@ export default function PosScreen() {
     cartState.addToCart(product, unit || product.baseUnit || product.units?.[0]);
   };
 
-  /* ── shift handlers ──────────────────────────────────────── */
-
   const handleOpenShift = async (openingFloat) => {
     setShiftSubmitting(true);
     try {
@@ -318,8 +313,6 @@ export default function PosScreen() {
       shift,
     });
   };
-
-  /* ── gate states ─────────────────────────────────────────── */
 
   if (permsNotReady) {
     return (
@@ -507,67 +500,66 @@ export default function PosScreen() {
     );
   }
 
-  /* ── ready ───────────────────────────────────────────────── */
-
   const cartEmpty = cartState.cart.length === 0;
 
   return (
-    <SafeAreaView style={styles.safe} edges={['top']}>
-      <PosHeader
-        syncStatus={syncStatus}
-        pendingCount={counts.pending}
-        heldCount={cartState.held.length}
-        totalQty={cartState.totalQty}
-        subtotal={cartState.subtotal}
-        onScan={() => setScanOpen(true)}
-        onHeld={() => setHeldOpen(true)}
-        onCart={() => setCartOpen(true)}
-        onCloseShift={
-          gate.shift ? () => openShiftModal('close', gate.shift) : undefined
-        }
-        formatCurrency={formatCurrency}
-        c={c}
-        styles={styles}
-      />
-
-      <PosSearchBar
-        query={productsState.query}
-        setQuery={productsState.setQuery}
-        c={c}
-        styles={styles}
-      />
-
-      <PosCategoryChips
-        categories={categories}
-        active={category}
-        onPick={setCategory}
-        c={c}
-        styles={styles}
-      />
-
-      <View style={{ flex: 1 }}>
-        <PosProductGrid
-          products={visibleProducts}
-          inCart={inCart}
-          searching={productsState.searching}
-          loadedOnce={productsState.loadedOnce}
-          error={productsState.error}
-          query={productsState.query}
-          onAdd={handleAdd}
-          onRetry={productsState.reload}
+    <View style={styles.root}>
+      <SafeAreaView style={styles.safeTop} edges={['top']}>
+        <PosHeader
+          syncStatus={syncStatus}
+          pendingCount={counts.pending}
+          heldCount={cartState.held.length}
+          totalQty={cartState.totalQty}
+          subtotal={cartState.subtotal}
+          onScan={() => setScanOpen(true)}
+          onHeld={() => setHeldOpen(true)}
+          onCart={() => setCartOpen(true)}
+          onCloseShift={
+            gate.shift ? () => openShiftModal('close', gate.shift) : undefined
+          }
           formatCurrency={formatCurrency}
           c={c}
           styles={styles}
         />
-        <PosSnackbar
-          visible={snackOpen}
-          onReceipt={() => {
-            setSnackOpen(false);
-            showLastReceipt();
-          }}
+      </SafeAreaView>
+
+      <View style={styles.bodyWrap}>
+        <PosSearchBar
+          query={productsState.query}
+          setQuery={productsState.setQuery}
           c={c}
           styles={styles}
         />
+
+        <PosCategoryChips
+          categories={categories}
+          active={category}
+          onPick={setCategory}
+          c={c}
+          styles={styles}
+        />
+
+        <View style={{ flex: 1 }}>
+          <PosProductGrid
+            products={visibleProducts}
+            inCart={inCart}
+            searching={productsState.searching}
+            loadedOnce={productsState.loadedOnce}
+            error={productsState.error}
+            query={productsState.query}
+            onAdd={handleAdd}
+            onRetry={productsState.reload}
+            formatCurrency={formatCurrency}
+            c={c}
+            styles={styles}
+          />
+          <PosSnackbar
+            visible={snackOpen}
+            onReceipt={showLastReceipt}
+            c={c}
+            styles={styles}
+          />
+        </View>
       </View>
 
       <PosFooter
@@ -705,14 +697,15 @@ export default function PosScreen() {
         c={c}
         styles={styles}
       />
-    </SafeAreaView>
+    </View>
   );
 }
 
-
 const makeStyles = (c) =>
   StyleSheet.create({
-    safe: { flex: 1, backgroundColor: c.background },
+    root: { flex: 1, backgroundColor: c.background },
+    safeTop: { backgroundColor: c.primary },
+    bodyWrap: { flex: 1, backgroundColor: c.background },
 
     center: {
       flex: 1,
@@ -752,10 +745,12 @@ const makeStyles = (c) =>
       gap: 8,
       paddingHorizontal: spacing.md,
       paddingTop: spacing.sm,
-      paddingBottom: spacing.xs,
+      paddingBottom: spacing.sm,
+      backgroundColor: c.primary,
     },
     shiftSub: {
-      color: c.textSecondary,
+      color: c.textOnPrimary,
+      opacity: 0.85,
       fontSize: 13,
       lineHeight: 19,
       marginTop: 4,
@@ -781,7 +776,12 @@ const makeStyles = (c) =>
       justifyContent: 'center',
     },
     logo: { width: 32, height: 32 },
-    brandDivider: { width: 1, height: 28, backgroundColor: c.border },
+    brandDivider: {
+      width: 1,
+      height: 28,
+      backgroundColor: c.textOnPrimary,
+      opacity: 0.35,
+    },
     statusRow: {
       flexDirection: 'row',
       alignItems: 'center',
@@ -789,7 +789,12 @@ const makeStyles = (c) =>
       flexShrink: 1,
     },
     statusDot: { width: 10, height: 10, borderRadius: 5 },
-    statusText: { fontSize: 14, fontWeight: '700', flexShrink: 1 },
+    statusText: {
+      color: c.textOnPrimary,
+      fontSize: 14,
+      fontWeight: '700',
+      flexShrink: 1,
+    },
     headerActions: { flexDirection: 'row', alignItems: 'flex-start', gap: 8 },
     actionWrap: { alignItems: 'center', minWidth: 48 },
     actionBtn: {
@@ -811,6 +816,8 @@ const makeStyles = (c) =>
       borderRadius: 10,
       paddingHorizontal: 5,
       backgroundColor: c.primary,
+      borderWidth: 1.5,
+      borderColor: c.surface,
       alignItems: 'center',
       justifyContent: 'center',
     },
@@ -820,7 +827,7 @@ const makeStyles = (c) =>
       fontWeight: '900',
     },
     actionLabel: {
-      color: c.textPrimary,
+      color: c.textOnPrimary,
       fontSize: 11,
       fontWeight: '700',
       marginTop: 4,
@@ -831,6 +838,7 @@ const makeStyles = (c) =>
       alignItems: 'center',
       gap: 8,
       paddingHorizontal: spacing.md,
+      paddingTop: spacing.md,
       paddingBottom: spacing.sm,
     },
     searchBox: {
@@ -901,17 +909,21 @@ const makeStyles = (c) =>
       letterSpacing: 0.5,
     },
 
-    tile: {
-      width: '31.5%',
-      aspectRatio: 0.85,
-      backgroundColor: c.surface,
-      borderWidth: 1,
-      borderColor: c.border,
-      borderRadius: radius.lg,
-      padding: 10,
-      overflow: 'hidden',
-      justifyContent: 'space-between',
-    },
+tile: {
+  width: '31.5%',
+  aspectRatio: 0.85,
+  backgroundColor: c.surface,
+  borderWidth: 1,
+  borderColor: c.border,
+  borderRadius: radius.lg,
+  padding: 10,
+  justifyContent: 'space-between',
+  shadowColor: c.shadow || '#000',
+  shadowOpacity: 0.08,
+  shadowRadius: 10,
+  shadowOffset: { width: 0, height: 4 },
+  elevation: 3,
+},
     tileSkeleton: {
       backgroundColor: c.surfaceElevated,
       borderColor: c.border,
@@ -1420,9 +1432,107 @@ const makeStyles = (c) =>
       marginTop: 8,
     },
     brandName: {
-      color: c.textPrimary,
+      color: c.textOnPrimary,
       fontSize: 15,
       fontWeight: '900',
       letterSpacing: -0.3,
+    },
+
+    /* ── M-Pesa waiting / success ────────────────────────────── */
+    mpesaWaiting: {
+      alignItems: 'center',
+      gap: 12,
+      paddingVertical: 24,
+      paddingHorizontal: 8,
+    },
+    mpesaPulseWrap: {
+      width: 96,
+      height: 96,
+      alignItems: 'center',
+      justifyContent: 'center',
+      marginBottom: 4,
+    },
+    mpesaPulseRing: {
+      position: 'absolute',
+      width: 96,
+      height: 96,
+      borderRadius: 48,
+      borderWidth: 2,
+    },
+    mpesaPulseCore: {
+      width: 56,
+      height: 56,
+      borderRadius: 28,
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+    mpesaWaitTitle: {
+      color: c.textPrimary,
+      fontSize: 16,
+      fontWeight: '800',
+      marginTop: 6,
+    },
+    mpesaWaitHint: {
+      color: c.textMuted,
+      fontSize: 13,
+      lineHeight: 19,
+      textAlign: 'center',
+      paddingHorizontal: 12,
+    },
+    mpesaCancelBtn: {
+      marginTop: 6,
+      paddingVertical: 10,
+      paddingHorizontal: 18,
+      borderRadius: radius.md,
+      borderWidth: 1,
+      borderColor: c.border,
+      backgroundColor: c.surface,
+    },
+    mpesaCancelText: {
+      color: c.textSecondary,
+      fontSize: 13,
+      fontWeight: '700',
+    },
+
+    mpesaSuccess: {
+      alignItems: 'center',
+      gap: 10,
+      paddingVertical: 24,
+    },
+    mpesaSuccessIcon: {
+      width: 76,
+      height: 76,
+      borderRadius: 38,
+      alignItems: 'center',
+      justifyContent: 'center',
+      marginBottom: 4,
+    },
+    mpesaSuccessTitle: {
+      color: c.textPrimary,
+      fontSize: 17,
+      fontWeight: '800',
+    },
+    mpesaSuccessSub: {
+      color: c.textSecondary,
+      fontSize: 14,
+      fontWeight: '700',
+      fontVariant: ['tabular-nums'],
+    },
+    mpesaCodePill: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 8,
+      paddingVertical: 8,
+      paddingHorizontal: 14,
+      borderRadius: 999,
+      backgroundColor: c.primarySoft,
+      marginTop: 4,
+    },
+    mpesaCodeText: {
+      color: c.textPrimary,
+      fontSize: 14,
+      fontWeight: '800',
+      letterSpacing: 2,
+      fontVariant: ['tabular-nums'],
     },
   });

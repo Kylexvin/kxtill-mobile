@@ -10,7 +10,11 @@ import { SettingsProvider } from './src/context/SettingsContext';
 import { PermissionsProvider } from './src/context/PermissionsContext';
 import RootNavigator from './src/navigation/RootNavigator';
 import fcmService from './src/services/fcm.service';
-
+console.log({
+  SafeAreaProvider, OnboardingProvider, AuthProvider, OrganizationProvider,
+  SettingsProvider, PermissionsProvider, RootNavigator, useAuthContext,
+  useOrganizationContext, fcmService,
+});
 function FcmBootstrap() {
   const { status } = useAuthContext();
   const { activeOrganization } = useOrganizationContext();

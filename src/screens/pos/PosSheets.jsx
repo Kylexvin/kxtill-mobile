@@ -1,12 +1,14 @@
 // src/screens/pos/PosSheets.jsx
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
+import { Animated } from 'react-native';
 import {
   View,
   Text,
   TextInput,
   Pressable,
   FlatList,
+  ScrollView,
   Modal,
   ActivityIndicator,
   KeyboardAvoidingView,
@@ -89,212 +91,367 @@ export function PosPaymentModal({
     >
       <KeyboardAvoidingView
         style={styles.sheetBackdrop}
-        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+        keyboardVerticalOffset={0}
       >
         <Pressable style={{ flex: 1 }} onPress={() => !busy && onClose()} />
+
         <View
           style={[
             styles.sheet,
-            { paddingBottom: Math.max(32, insets.bottom + 16) },
+            {
+              paddingBottom: Math.max(
+                32,
+                insets.bottom + 16,
+                // extra room so the last input isn't right against the keyboard
+                0
+              ),
+            },
           ]}
         >
-          <View style={styles.sheetHandle} />
-          <Text style={styles.sheetTotal}>{formatCurrency(subtotal)}</Text>
+          {/* Scrollable inner so inputs stay reachable when the keyboard
+              shrinks the sheet on Android. */}
+          <ScrollView
+            keyboardShouldPersistTaps="handled"
+            showsVerticalScrollIndicator={false}
+            contentContainerStyle={{ gap: 8 }}
+          >
+            <View style={styles.sheetHandle} />
+            <Text style={styles.sheetTotal}>{formatCurrency(subtotal)}</Text>
 
-          {showMethods ? (
-            <View style={styles.methodGrid}>
-              {PAYMENT_METHODS.map((m) => {
-                const disabled =
-                  busy || (m.key === 'CREDIT' && !creditAllowed);
-                const active = method === m.key;
-                return (
-                  <Pressable
-                    key={m.key}
-                    disabled={disabled}
-                    onPress={() => {
-                      setMethod(m.key);
-                      setShowMethods(false);
-                    }}
-                    style={[
-                      styles.methodChip,
-                      active && styles.methodChipActive,
-                      disabled && styles.methodChipDisabled,
-                    ]}
-                  >
-                    <Ionicons
-                      name={m.icon}
-                      size={16}
-                      color={
-                        active
-                          ? c.textOnPrimary
-                          : disabled
-                          ? c.textMuted
-                          : c.textPrimary
-                      }
-                    />
-                    <Text
+            {showMethods ? (
+              <View style={styles.methodGrid}>
+                {PAYMENT_METHODS.map((m) => {
+                  const disabled =
+                    busy || (m.key === 'CREDIT' && !creditAllowed);
+                  const active = method === m.key;
+                  return (
+                    <Pressable
+                      key={m.key}
+                      disabled={disabled}
+                      onPress={() => {
+                        setMethod(m.key);
+                        setShowMethods(false);
+                      }}
                       style={[
-                        styles.methodText,
-                        active && styles.methodTextActive,
-                        disabled && styles.methodTextDisabled,
+                        styles.methodChip,
+                        active && styles.methodChipActive,
+                        disabled && styles.methodChipDisabled,
                       ]}
                     >
-                      {m.label}
-                    </Text>
-                  </Pressable>
-                );
-              })}
-            </View>
-          ) : (
-            <View style={styles.rowBetween}>
-              <Text style={styles.sheetTitle}>{methodLabel} payment</Text>
-              <Pressable
-                onPress={() => setShowMethods(true)}
-                disabled={busy}
-                hitSlop={8}
-              >
-                <Text style={styles.walkinText}>Change method</Text>
-              </Pressable>
-            </View>
-          )}
-
-          {method === 'CASH' ? (
-            <>
-              <Text style={styles.sheetKicker}>Received</Text>
-              <View style={styles.methodGrid}>
+                      <Ionicons
+                        name={m.icon}
+                        size={16}
+                        color={
+                          active
+                            ? c.textOnPrimary
+                            : disabled
+                            ? c.textMuted
+                            : c.textPrimary
+                        }
+                      />
+                      <Text
+                        style={[
+                          styles.methodText,
+                          active && styles.methodTextActive,
+                          disabled && styles.methodTextDisabled,
+                        ]}
+                      >
+                        {m.label}
+                      </Text>
+                    </Pressable>
+                  );
+                })}
+              </View>
+            ) : (
+              <View style={styles.rowBetween}>
+                <Text style={styles.sheetTitle}>{methodLabel} payment</Text>
                 <Pressable
-                  onPress={() => setTendered(String(total))}
-                  style={styles.quickChip}
+                  onPress={() => setShowMethods(true)}
+                  disabled={busy}
+                  hitSlop={8}
                 >
-                  <Text style={styles.quickChipText}>Exact</Text>
+                  <Text style={styles.walkinText}>Change method</Text>
                 </Pressable>
-                {quick.map((n) => (
+              </View>
+            )}
+
+            {method === 'CASH' ? (
+              <>
+                <Text style={styles.sheetKicker}>Received</Text>
+                <View style={styles.methodGrid}>
                   <Pressable
-                    key={n}
-                    onPress={() => setTendered(String(n))}
+                    onPress={() => setTendered(String(total))}
                     style={styles.quickChip}
                   >
-                    <Text style={styles.quickChipText}>{n}</Text>
+                    <Text style={styles.quickChipText}>Exact</Text>
                   </Pressable>
-                ))}
-              </View>
-              <TextInput
-                value={tendered}
-                onChangeText={setTendered}
-                placeholder="Amount received"
-                placeholderTextColor={c.textMuted}
-                keyboardType="numeric"
-                style={styles.sheetInput}
-              />
-              {given > 0 ? (
-                <View style={styles.changeRow}>
-                  <Text style={styles.changeLabel}>
-                    {short ? 'Short by' : 'Change'}
-                  </Text>
-                  <Text
-                    style={[styles.changeValue, short && { color: c.danger }]}
-                  >
-                    {formatCurrency(Math.abs(change))}
-                  </Text>
-                </View>
-              ) : null}
-            </>
-          ) : null}
-
-          {method === 'MPESA' ? (
-            <>
-              {mpesa.phase === 'success' ? (
-                <View style={styles.changeRow}>
-                  <Text style={styles.changeLabel}>Paid</Text>
-                  <Text style={styles.changeValue}>{mpesa.receipt}</Text>
-                </View>
-              ) : waiting ? (
-                <View
-                  style={{ alignItems: 'center', gap: 10, paddingVertical: 12 }}
-                >
-                  <ActivityIndicator color={c.primary} />
-                  <Text style={styles.centerText}>
-                    Waiting for customer to enter PIN…
-                  </Text>
-                  <Pressable
-                    onPress={onCancelPrompt}
-                    style={styles.secondaryBtn}
-                  >
-                    <Text style={styles.secondaryBtnText}>Cancel</Text>
-                  </Pressable>
-                </View>
-              ) : (
-                <>
-                  <Text style={styles.sheetKicker}>Customer phone</Text>
-                  <TextInput
-                    value={phone}
-                    onChangeText={setPhone}
-                    placeholder="07XX XXX XXX"
-                    placeholderTextColor={c.textMuted}
-                    keyboardType="phone-pad"
-                    style={styles.sheetInput}
-                  />
-                  {mpesa.error ? (
-                    <Text
-                      style={{
-                        color: c.danger,
-                        fontSize: 13,
-                        fontWeight: '700',
-                      }}
+                  {quick.map((n) => (
+                    <Pressable
+                      key={n}
+                      onPress={() => setTendered(String(n))}
+                      style={styles.quickChip}
                     >
-                      {mpesa.error}
+                      <Text style={styles.quickChipText}>{n}</Text>
+                    </Pressable>
+                  ))}
+                </View>
+                <TextInput
+                  value={tendered}
+                  onChangeText={setTendered}
+                  placeholder="Amount received"
+                  placeholderTextColor={c.textMuted}
+                  keyboardType="numeric"
+                  style={styles.sheetInput}
+                />
+                {given > 0 ? (
+                  <View style={styles.changeRow}>
+                    <Text style={styles.changeLabel}>
+                      {short ? 'Short by' : 'Change'}
                     </Text>
-                  ) : null}
-                  <Pressable onPress={onSendPrompt} style={styles.confirmBtn}>
-                    <Text style={styles.confirmText}>Send M-Pesa prompt</Text>
+                    <Text
+                      style={[styles.changeValue, short && { color: c.danger }]}
+                    >
+                      {formatCurrency(Math.abs(change))}
+                    </Text>
+                  </View>
+                ) : null}
+              </>
+            ) : null}
+
+            {method === 'MPESA' ? (
+              <MpesaBody
+                mpesa={mpesa}
+                phone={phone}
+                setPhone={setPhone}
+                manual={manual}
+                setManual={setManual}
+                onSendPrompt={onSendPrompt}
+                onCancelPrompt={onCancelPrompt}
+                referenceInput={referenceInput}
+                formatCurrency={formatCurrency}
+                c={c}
+                styles={styles}
+              />
+            ) : needsReference(method) && method !== 'MPESA' ? (
+              referenceInput
+            ) : null}
+
+            {showConfirm && !waiting ? (
+              <Pressable
+                onPress={onConfirm}
+                disabled={submitting || short}
+                style={[
+                  styles.confirmBtn,
+                  (submitting || short) && { opacity: 0.6 },
+                ]}
+              >
+                {submitting ? (
+                  <ActivityIndicator color={c.textOnPrimary} />
+                ) : (
+                  <>
+                    <Text style={styles.confirmText}>Confirm sale</Text>
                     <Ionicons
-                      name="paper-plane-outline"
+                      name="checkmark"
                       size={18}
                       color={c.textOnPrimary}
                     />
-                  </Pressable>
-                  <Pressable
-                    onPress={() => setManual((v) => !v)}
-                    style={styles.walkinRow}
-                  >
-                    <Text style={styles.walkinText}>
-                      {manual ? 'Hide code entry' : 'Already paid? Enter code'}
-                    </Text>
-                  </Pressable>
-                  {manual ? referenceInput : null}
-                </>
-              )}
-            </>
-          ) : needsReference(method) && method !== 'MPESA' ? (
-            referenceInput
-          ) : null}
-
-          {showConfirm && !waiting ? (
-            <Pressable
-              onPress={onConfirm}
-              disabled={submitting || short}
-              style={[
-                styles.confirmBtn,
-                (submitting || short) && { opacity: 0.6 },
-              ]}
-            >
-              {submitting ? (
-                <ActivityIndicator color={c.textOnPrimary} />
-              ) : (
-                <>
-                  <Text style={styles.confirmText}>Confirm sale</Text>
-                  <Ionicons
-                    name="checkmark"
-                    size={18}
-                    color={c.textOnPrimary}
-                  />
-                </>
-              )}
-            </Pressable>
-          ) : null}
+                  </>
+                )}
+              </Pressable>
+            ) : null}
+          </ScrollView>
         </View>
       </KeyboardAvoidingView>
     </Modal>
+  );
+}
+
+/* M-Pesa body — extracted so state transitions can animate cleanly. */
+/* M-Pesa body — Waiting → Success, animated. */
+
+function MpesaBody({
+  mpesa,
+  phone,
+  setPhone,
+  manual,
+  setManual,
+  onSendPrompt,
+  onCancelPrompt,
+  referenceInput,
+  formatCurrency,
+  c,
+  styles,
+}) {
+  const waiting = mpesa.phase === 'waiting';
+  const success = mpesa.phase === 'success';
+
+  // Fade whole slot on phase change.
+  const fade = useRef(new Animated.Value(1)).current;
+  useEffect(() => {
+    fade.setValue(0);
+    Animated.timing(fade, {
+      toValue: 1,
+      duration: 260,
+      useNativeDriver: true,
+    }).start();
+  }, [mpesa.phase, fade]);
+
+  // Pulse the ring while waiting.
+  const pulse = useRef(new Animated.Value(0)).current;
+  useEffect(() => {
+    if (!waiting) {
+      pulse.stopAnimation();
+      pulse.setValue(0);
+      return undefined;
+    }
+    const loop = Animated.loop(
+      Animated.timing(pulse, {
+        toValue: 1,
+        duration: 1400,
+        useNativeDriver: true,
+      })
+    );
+    loop.start();
+    return () => loop.stop();
+  }, [waiting, pulse]);
+
+  // Pop the check on success.
+  const pop = useRef(new Animated.Value(0)).current;
+  useEffect(() => {
+    if (!success) {
+      pop.setValue(0);
+      return;
+    }
+    Animated.spring(pop, {
+      toValue: 1,
+      friction: 5,
+      tension: 120,
+      useNativeDriver: true,
+    }).start();
+  }, [success, pop]);
+
+  return (
+    <Animated.View style={{ opacity: fade, gap: 4 }}>
+      {success ? (
+        <View style={styles.mpesaSuccess}>
+          <Animated.View
+            style={[
+              styles.mpesaSuccessIcon,
+              {
+                backgroundColor: c.successSoft || c.primarySoft,
+                transform: [{ scale: pop }],
+              },
+            ]}
+          >
+            <Ionicons
+              name="checkmark"
+              size={42}
+              color={c.success}
+            />
+          </Animated.View>
+          <Text style={styles.mpesaSuccessTitle}>Payment received</Text>
+          <Text style={styles.mpesaSuccessSub}>
+            {formatCurrency(mpesa.amount || mpesa.total || 0)}
+          </Text>
+          <View style={styles.mpesaCodePill}>
+            <Ionicons
+              name="receipt-outline"
+              size={14}
+              color={c.link}
+            />
+            <Text style={styles.mpesaCodeText}>{mpesa.receipt}</Text>
+          </View>
+        </View>
+      ) : waiting ? (
+        <View style={styles.mpesaWaiting}>
+          <View style={styles.mpesaPulseWrap}>
+            <Animated.View
+              style={[
+                styles.mpesaPulseRing,
+                {
+                  borderColor: c.primary,
+                  opacity: pulse.interpolate({
+                    inputRange: [0, 1],
+                    outputRange: [0.55, 0],
+                  }),
+                  transform: [
+                    {
+                      scale: pulse.interpolate({
+                        inputRange: [0, 1],
+                        outputRange: [0.6, 1.6],
+                      }),
+                    },
+                  ],
+                },
+              ]}
+            />
+            <View
+              style={[
+                styles.mpesaPulseCore,
+                { backgroundColor: c.primary },
+              ]}
+            >
+              <ActivityIndicator color={c.textOnPrimary} />
+            </View>
+          </View>
+          <Text style={styles.mpesaWaitTitle}>
+            Waiting for PIN
+          </Text>
+          <Text style={styles.mpesaWaitHint}>
+            A prompt was sent to {phone || 'the customer'}. They have about
+            60 seconds to enter their M-Pesa PIN.
+          </Text>
+          <Pressable
+            onPress={onCancelPrompt}
+            style={styles.mpesaCancelBtn}
+          >
+            <Text style={styles.mpesaCancelText}>Cancel prompt</Text>
+          </Pressable>
+        </View>
+      ) : (
+        <>
+          <Text style={styles.sheetKicker}>Customer phone</Text>
+          <TextInput
+            value={phone}
+            onChangeText={setPhone}
+            placeholder="07XX XXX XXX"
+            placeholderTextColor={c.textMuted}
+            keyboardType="phone-pad"
+            style={styles.sheetInput}
+          />
+          {mpesa.error ? (
+            <Text
+              style={{
+                color: c.danger,
+                fontSize: 13,
+                fontWeight: '700',
+                marginTop: 4,
+              }}
+            >
+              {mpesa.error}
+            </Text>
+          ) : null}
+          <Pressable onPress={onSendPrompt} style={styles.confirmBtn}>
+            <Text style={styles.confirmText}>Send M-Pesa prompt</Text>
+            <Ionicons
+              name="paper-plane-outline"
+              size={18}
+              color={c.textOnPrimary}
+            />
+          </Pressable>
+          <Pressable
+            onPress={() => setManual((v) => !v)}
+            style={styles.walkinRow}
+          >
+            <Text style={styles.walkinText}>
+              {manual ? 'Hide code entry' : 'Already paid? Enter code'}
+            </Text>
+          </Pressable>
+          {manual ? referenceInput : null}
+        </>
+      )}
+    </Animated.View>
   );
 }
 

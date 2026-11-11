@@ -17,4 +17,5 @@ export const config = {
 export const BRAND_ICONS = {
   kxtill: require('../../assets/icons/kxtill.png'),
   kxbyte: require('../../assets/icons/darklogo.png'),
+  mpesa: require('../../assets/icons/mpesa.png'),
 };

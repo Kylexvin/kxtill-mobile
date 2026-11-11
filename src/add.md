@@ -12,3 +12,13 @@ Cache refresh in the background, update asap✅
 alert screen to be navigatable to specific screens
 receipts and shares
 print barcodes in bulk
+VirtualizedList slow-update warning appears when the list is idle 100+ seconds then re-renders.
+
+Non-blocking. Dev-only warning, doesn't ship to production.
+
+Fix when ready:
+
+Wrap PosProductTile in React.memo with a custom comparator (product, qty, c, styles).
+Wrap renderItem in useCallback in PosProductGrid.
+Consider getItemLayout once tile height is fixed (aspectRatio: 0.85 + width: '31.5%' means predictable height per row).
+Test on a low-end Android before/after to confirm it's worth touching.

@@ -1,12 +1,7 @@
 // src/screens/branches/BranchesScreen.jsx
 //
-// v5 — redesigned.
-//   - Compact stat strip at top (total, sales, avg per branch)
-//   - Horizontal leaderboard scroller for top branches
-//   - Card list below with inline revenue bars
-//   - Single-branch case shows a full-width hero instead
-//
-// All data wiring, caching, and race handling preserved from v4.
+// v6 — single-branch owner uses `isOwner` from PermissionsContext so the
+// hint is correct regardless of backend isOrgWide. Rest unchanged.
 
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
@@ -30,6 +25,7 @@ import { spacing, radius } from '../../styles/spacing';
 import { typography } from '../../styles/typography';
 import { useOrganizationContext } from '../../context/OrganizationContext';
 import { useSettings } from '../../context/SettingsContext';
+import { usePermissionsContext } from '../../context/PermissionsContext';
 import { ROUTES } from '../../constants/routes';
 import {
   readBranchesListCache,
@@ -46,8 +42,6 @@ const todayLabel = () => {
   const d = new Date();
   return `${d.getDate()} ${MONTHS[d.getMonth()]}`;
 };
-
-/* ── Skeleton ─────────────────────────────────────────────────── */
 
 function Sk({ width, height, r = 8, style }) {
   const pulse = useRef(new Animated.Value(0.45)).current;
@@ -80,20 +74,14 @@ function Sk({ width, height, r = 8, style }) {
   );
 }
 
-function BranchesSkeleton({ styles, insets, c }) {
+function BranchesSkeleton({ styles, insets }) {
   return (
     <SafeAreaView style={styles.safe} edges={['top']}>
-      <ScrollView
-        contentContainerStyle={styles.scroll}
-        scrollEnabled={false}
-      >
-        {/* Top bar skeleton */}
+      <ScrollView contentContainerStyle={styles.scroll} scrollEnabled={false}>
         <View style={[styles.topBar, { marginTop: insets.top + 8 }]}>
           <Sk width={120} height={26} r={8} />
           <Sk width={36} height={36} r={18} />
         </View>
-
-        {/* Stat strip skeleton */}
         <View style={styles.statStrip}>
           {[0, 1, 2].map((i) => (
             <View key={i} style={styles.statStripItem}>
@@ -102,8 +90,6 @@ function BranchesSkeleton({ styles, insets, c }) {
             </View>
           ))}
         </View>
-
-        {/* Leaderboard skeleton */}
         <View style={{ paddingHorizontal: spacing.xl, marginTop: 20 }}>
           <Sk width={100} height={11} r={5} />
           <View style={{ flexDirection: 'row', gap: 10, marginTop: 12 }}>
@@ -111,8 +97,6 @@ function BranchesSkeleton({ styles, insets, c }) {
             <Sk width={140} height={92} r={14} />
           </View>
         </View>
-
-        {/* List skeleton */}
         <View style={{ paddingHorizontal: spacing.xl, marginTop: 24 }}>
           <Sk width={100} height={11} r={5} />
           {[0, 1, 2].map((i) => (
@@ -130,8 +114,6 @@ function BranchesSkeleton({ styles, insets, c }) {
     </SafeAreaView>
   );
 }
-
-/* ── Top bar ─────────────────────────────────────────────────── */
 
 function TopBar({ c, styles, insets, title, subtitle, onBack }) {
   return (
@@ -157,9 +139,7 @@ function TopBar({ c, styles, insets, title, subtitle, onBack }) {
   );
 }
 
-/* ── Stat strip ──────────────────────────────────────────────── */
-
-function StatStrip({ c, styles, stats }) {
+function StatStrip({ styles, stats }) {
   return (
     <View style={styles.statStrip}>
       {stats.map((s, i) => (
@@ -178,8 +158,6 @@ function StatStrip({ c, styles, stats }) {
     </View>
   );
 }
-
-/* ── Leaderboard (horizontal) ────────────────────────────────── */
 
 function LeaderboardCard({ b, lead, styles, c, onPress }) {
   return (
@@ -230,12 +208,9 @@ function LeaderboardCard({ b, lead, styles, c, onPress }) {
   );
 }
 
-/* ── Branch row ──────────────────────────────────────────────── */
-
 const BranchRow = memo(function BranchRow({
   b,
   rank,
-  share,
   maxRev,
   perms,
   styles,
@@ -294,11 +269,7 @@ const BranchRow = memo(function BranchRow({
             </Text>
             {hasLow ? (
               <View style={styles.rowWarnChip}>
-                <Ionicons
-                  name="alert-circle"
-                  size={10}
-                  color={c.warning}
-                />
+                <Ionicons name="alert-circle" size={10} color={c.warning} />
                 <Text style={styles.rowWarnText}>{b.lowStockItems}</Text>
               </View>
             ) : null}
@@ -324,14 +295,11 @@ const BranchRow = memo(function BranchRow({
 
           <View style={styles.rowMetaLine}>
             {perms.members ? (
-              <Text style={styles.rowMeta}>
-                {b.activeUsers} staff
-              </Text>
+              <Text style={styles.rowMeta}>{b.activeUsers} staff</Text>
             ) : null}
             {perms.revenue ? (
               <Text style={styles.rowMeta}>
-                {b.transactions}{' '}
-                {b.transactions === 1 ? 'sale' : 'sales'}
+                {b.transactions} {b.transactions === 1 ? 'sale' : 'sales'}
               </Text>
             ) : null}
           </View>
@@ -346,18 +314,12 @@ const BranchRow = memo(function BranchRow({
             {b.revenueLabel}
           </Text>
         ) : (
-          <Ionicons
-            name="chevron-forward"
-            size={16}
-            color={c.textMuted}
-          />
+          <Ionicons name="chevron-forward" size={16} color={c.textMuted} />
         )}
       </Pressable>
     </Animated.View>
   );
 });
-
-/* ── Single-branch hero ──────────────────────────────────────── */
 
 function SingleHero({ b, perms, styles, c, animate, onPress }) {
   const enter = useRef(new Animated.Value(animate ? 0 : 1)).current;
@@ -426,19 +388,14 @@ function SingleHero({ b, perms, styles, c, animate, onPress }) {
         <View style={styles.heroFooter}>
           {perms.revenue ? (
             <Text style={styles.heroMeta}>
-              {b.transactions}{' '}
-              {b.transactions === 1 ? 'sale' : 'sales'}
+              {b.transactions} {b.transactions === 1 ? 'sale' : 'sales'}
             </Text>
           ) : (
             <View />
           )}
           <View style={styles.heroOpen}>
             <Text style={styles.heroOpenText}>Open</Text>
-            <Ionicons
-              name="arrow-forward"
-              size={14}
-              color={c.textOnPrimary}
-            />
+            <Ionicons name="arrow-forward" size={14} color={c.textOnPrimary} />
           </View>
         </View>
       </Pressable>
@@ -446,11 +403,7 @@ function SingleHero({ b, perms, styles, c, animate, onPress }) {
       <View style={styles.heroTiles}>
         {perms.revenue ? (
           <View style={styles.heroTile}>
-            <Ionicons
-              name="pricetag-outline"
-              size={16}
-              color={c.link}
-            />
+            <Ionicons name="pricetag-outline" size={16} color={c.link} />
             <Text style={styles.heroTileValue} numberOfLines={1}>
               {b.avgSaleLabel || '—'}
             </Text>
@@ -459,14 +412,8 @@ function SingleHero({ b, perms, styles, c, animate, onPress }) {
         ) : null}
         {perms.members ? (
           <View style={styles.heroTile}>
-            <Ionicons
-              name="people-outline"
-              size={16}
-              color={c.link}
-            />
-            <Text style={styles.heroTileValue}>
-              {b.activeUsers ?? 0}
-            </Text>
+            <Ionicons name="people-outline" size={16} color={c.link} />
+            <Text style={styles.heroTileValue}>{b.activeUsers ?? 0}</Text>
             <Text style={styles.heroTileLabel}>Staff</Text>
           </View>
         ) : null}
@@ -479,9 +426,7 @@ function SingleHero({ b, perms, styles, c, animate, onPress }) {
                   : 'checkmark-circle-outline'
               }
               size={16}
-              color={
-                b.lowStockItems > 0 ? c.warning : c.success
-              }
+              color={b.lowStockItems > 0 ? c.warning : c.success}
             />
             <Text
               style={[
@@ -501,8 +446,6 @@ function SingleHero({ b, perms, styles, c, animate, onPress }) {
   );
 }
 
-/* ── Screen ──────────────────────────────────────────────────── */
-
 export default function BranchesScreen() {
   const { theme: c } = useTheme();
   const styles = useMemo(() => makeStyles(c), [c]);
@@ -510,6 +453,7 @@ export default function BranchesScreen() {
   const insets = useSafeAreaInsets();
   const { activeOrganization } = useOrganizationContext();
   const { formatCurrency } = useSettings();
+  const { isOwner } = usePermissionsContext();
 
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -594,14 +538,12 @@ export default function BranchesScreen() {
     }),
     [data?.scope]
   );
-  const isOrgWide = data?.scope?.isOrgWide === true;
 
   const branches = useMemo(() => {
     const list = data?.branches || [];
     const sorted = perms.revenue
       ? [...list].sort(
-          (a, b) =>
-            (Number(b.revenue) || 0) - (Number(a.revenue) || 0)
+          (a, b) => (Number(b.revenue) || 0) - (Number(a.revenue) || 0)
         )
       : list;
     return sorted.map((b) => {
@@ -610,8 +552,7 @@ export default function BranchesScreen() {
       return {
         ...b,
         revenueLabel: formatCurrency(rev),
-        avgSaleLabel:
-          tx > 0 ? formatCurrency(rev / tx) : null,
+        avgSaleLabel: tx > 0 ? formatCurrency(rev / tx) : null,
       };
     });
   }, [data, perms.revenue, formatCurrency]);
@@ -646,7 +587,7 @@ export default function BranchesScreen() {
   );
 
   if (loading && !data && !error) {
-    return <BranchesSkeleton styles={styles} insets={insets} c={c} />;
+    return <BranchesSkeleton styles={styles} insets={insets} />;
   }
 
   const stats = showStats
@@ -722,7 +663,7 @@ export default function BranchesScreen() {
         ) : null}
 
         {stats.length > 0 ? (
-          <StatStrip c={c} styles={styles} stats={stats} />
+          <StatStrip styles={styles} stats={stats} />
         ) : null}
 
         {showLeaderboard ? (
@@ -747,36 +688,18 @@ export default function BranchesScreen() {
           </>
         ) : null}
 
-        {single ? (
-          <View style={styles.section}>
-            <SingleHero
-              b={branches[0]}
-              perms={perms}
-              styles={styles}
-              c={c}
-              animate={shouldAnimate}
-              onPress={() => open(branches[0])}
-            />
-            {isOrgWide ? (
-              <View style={styles.tip}>
-                <Ionicons
-                  name="sparkles-outline"
-                  size={16}
-                  color={c.link}
-                />
-                <Text style={styles.tipText}>
-                  Add more branches to see rankings and share-of-revenue
-                  charts.
-                </Text>
-              </View>
-            ) : (
-              <Text style={styles.hint}>
-                Ask the owner to assign you to more branches if you need
-                access to others.
-              </Text>
-            )}
-          </View>
-        ) : null}
+{single ? (
+  <View style={styles.section}>
+    <SingleHero
+      b={branches[0]}
+      perms={perms}
+      styles={styles}
+      c={c}
+      animate={shouldAnimate}
+      onPress={() => open(branches[0])}
+    />
+  </View>
+) : null}
 
         {!single && branches.length > 0 ? (
           <View style={styles.section}>
@@ -786,11 +709,6 @@ export default function BranchesScreen() {
                 key={b.id}
                 b={b}
                 rank={i}
-                share={
-                  maxRev > 0
-                    ? ((Number(b.revenue) || 0) / maxRev) * 100
-                    : 0
-                }
                 maxRev={maxRev}
                 perms={perms}
                 styles={styles}
@@ -823,14 +741,11 @@ export default function BranchesScreen() {
   );
 }
 
-/* ── Styles ──────────────────────────────────────────────────── */
-
 const makeStyles = (c) =>
   StyleSheet.create({
     safe: { flex: 1, backgroundColor: c.background },
     scroll: { paddingBottom: spacing.xxxl },
 
-    /* Top bar */
     topBar: {
       flexDirection: 'row',
       alignItems: 'center',
@@ -859,7 +774,6 @@ const makeStyles = (c) =>
       justifyContent: 'center',
     },
 
-    /* Stat strip */
     statStrip: {
       flexDirection: 'row',
       marginHorizontal: spacing.xl,
@@ -898,7 +812,6 @@ const makeStyles = (c) =>
       fontVariant: ['tabular-nums'],
     },
 
-    /* Section */
     section: { marginTop: spacing.xl },
     sectionLabel: {
       ...typography.label,
@@ -909,7 +822,6 @@ const makeStyles = (c) =>
       marginBottom: spacing.sm,
     },
 
-    /* Leaderboard */
     leaderContent: {
       paddingHorizontal: spacing.xl,
       gap: 10,
@@ -959,7 +871,6 @@ const makeStyles = (c) =>
       fontVariant: ['tabular-nums'],
     },
 
-    /* Row */
     row: {
       flexDirection: 'row',
       alignItems: 'center',
@@ -1037,7 +948,6 @@ const makeStyles = (c) =>
       textAlign: 'right',
     },
 
-    /* Single hero */
     hero: {
       marginHorizontal: spacing.xl,
       backgroundColor: c.surface,
@@ -1146,7 +1056,6 @@ const makeStyles = (c) =>
       marginTop: 2,
     },
 
-    /* Stale / error */
     staleChip: {
       flexDirection: 'row',
       alignItems: 'center',
@@ -1182,7 +1091,6 @@ const makeStyles = (c) =>
     },
     retry: { color: c.danger, fontSize: 13, fontWeight: '900' },
 
-    /* Empty */
     empty: {
       alignItems: 'center',
       paddingVertical: 48,
@@ -1209,34 +1117,55 @@ const makeStyles = (c) =>
       textAlign: 'center',
     },
 
-    /* Tip / hint */
     tip: {
       flexDirection: 'row',
+      alignItems: 'flex-start',
+      gap: 12,
+      marginHorizontal: spacing.xl,
+      marginTop: 12,
+      padding: spacing.md,
+      borderRadius: 16,
+      backgroundColor: c.primarySoft,
+    },
+    tipIconWrap: {
+      width: 32,
+      height: 32,
+      borderRadius: 10,
+      backgroundColor: c.surface,
       alignItems: 'center',
-      gap: 10,
+      justifyContent: 'center',
+    },
+    tipTitle: {
+      color: c.textPrimary,
+      fontSize: 13,
+      fontWeight: '800',
+      marginBottom: 2,
+    },
+    tipText: {
+      color: c.textSecondary,
+      fontSize: 12,
+      lineHeight: 17,
+      fontWeight: '500',
+    },
+
+    memberNote: {
+      flexDirection: 'row',
+      alignItems: 'flex-start',
+      gap: 8,
       marginHorizontal: spacing.xl,
       marginTop: 12,
       padding: spacing.md,
       borderRadius: 14,
-      backgroundColor: c.primarySoft,
+      backgroundColor: c.surfaceElevated,
     },
-    tipText: {
+    memberNoteText: {
       flex: 1,
-      color: c.textSecondary,
-      fontSize: 13,
-      lineHeight: 18,
-      fontWeight: '500',
-    },
-    hint: {
       color: c.textMuted,
       fontSize: 12,
-      textAlign: 'center',
-      marginTop: 12,
-      paddingHorizontal: spacing.xl,
-      lineHeight: 18,
+      lineHeight: 17,
+      fontWeight: '600',
     },
 
-    /* Skeleton */
     skRow: {
       flexDirection: 'row',
       alignItems: 'center',

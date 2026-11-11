@@ -12,6 +12,7 @@ import {
   ActivityIndicator,
   useWindowDimensions,
   Image,
+  StyleSheet,
   Animated,
 } from 'react-native';
 import Ionicons from '@react-native-vector-icons/ionicons';
@@ -76,16 +77,13 @@ export function PosHeader({
         {!compact ? <View style={styles.brandDivider} /> : null}
 
         <View style={styles.statusRow}>
-          <Text
-            style={[styles.statusText, { color: c.textPrimary }]}
-            numberOfLines={1}
-          >
+          <Text style={styles.statusText} numberOfLines={1}>
             KxTill
           </Text>
           <View style={[styles.statusDot, { backgroundColor: tone }]} />
           {!compact ? (
             <Text
-              style={[styles.statusText, { color: tone, fontWeight: '600' }]}
+              style={[styles.statusText, { fontWeight: '600' }]}
               numberOfLines={1}
             >
               {statusLabel}
@@ -126,7 +124,7 @@ export function PosHeader({
             ) : null}
           </View>
           <Text
-            style={[styles.actionLabel, { color: c.primary, fontWeight: '800' }]}
+            style={[styles.actionLabel, { fontWeight: '800' }]}
             numberOfLines={1}
           >
             {formatCurrency(subtotal)}
@@ -339,15 +337,10 @@ export function PosProductGrid({
   c,
   styles,
 }) {
-  // First load hasn't completed yet → skeleton.
-  // Guards against the "No products yet" flash between gate-ready
-  // and the first catalogue load finishing.
   if (!loadedOnce) {
     return <ProductGridSkeleton styles={styles} />;
   }
 
-  // Searching with nothing yet AND no query → initial empty state,
-  // keep showing spinner rather than the empty panel.
   if (searching && products.length === 0 && !query) {
     return (
       <View style={styles.gridCenter}>
@@ -356,70 +349,58 @@ export function PosProductGrid({
     );
   }
 
-  const topProducts = products.slice(0, 5);
-  const restProducts = products.slice(5);
-
-  const renderTile = (item) => (
-    <PosProductTile
-      key={item.id}
-      product={item}
-      qty={inCart[item.id] || 0}
-      onAdd={onAdd}
-      formatCurrency={formatCurrency}
-      c={c}
-      styles={styles}
-    />
-  );
-
   return (
     <FlatList
-      data={[]}
+      data={products}
       keyExtractor={(item) => item.id}
       numColumns={3}
+      columnWrapperStyle={styles.gridRowWrap}
       contentContainerStyle={styles.gridContent}
       keyboardShouldPersistTaps="handled"
       ListHeaderComponent={
-        <>
-          {error ? (
-            <View style={styles.errorBox}>
-              <Ionicons name="alert-circle-outline" size={16} color={c.danger} />
-              <Text style={styles.errorText} numberOfLines={2}>
-                {error}
-              </Text>
-              <Pressable onPress={onRetry} hitSlop={8}>
-                <Text style={styles.retry}>Retry</Text>
-              </Pressable>
-            </View>
-          ) : null}
-
-          {!query && topProducts.length > 0 && (
-            <View style={styles.gridRowWrap}>
-              {topProducts.map(renderTile)}
-            </View>
-          )}
-        </>
-      }
-      ListEmptyComponent={
-        !query && topProducts.length === 0 ? (
-          searching ? (
-            <View style={styles.gridCenter}>
-              <ActivityIndicator color={c.primary} />
-            </View>
-          ) : (
-            <View style={styles.emptyCart}>
-              <Ionicons name="cube-outline" size={32} color={c.textMuted} />
-              <Text style={styles.emptyTitle}>
-                {query ? 'No products match' : 'No products yet'}
-              </Text>
-            </View>
-          )
+        error ? (
+          <View style={styles.errorBox}>
+            <Ionicons
+              name="alert-circle-outline"
+              size={16}
+              color={c.danger}
+            />
+            <Text style={styles.errorText} numberOfLines={2}>
+              {error}
+            </Text>
+            <Pressable onPress={onRetry} hitSlop={8}>
+              <Text style={styles.retry}>Retry</Text>
+            </Pressable>
+          </View>
         ) : null
       }
-      renderItem={() => null}
-      ListFooterComponent={
-        <View style={styles.gridRowWrap}>
-          {(query ? products : restProducts).map(renderTile)}
-        </View>
+      renderItem={({ item }) => (
+        <PosProductTile
+          product={item}
+          qty={inCart[item.id] || 0}
+          onAdd={onAdd}
+          formatCurrency={formatCurrency}
+          c={c}
+          styles={styles}
+        />
+      )}
+      ListEmptyComponent={
+        searching ? (
+          <View style={styles.gridCenter}>
+            <ActivityIndicator color={c.primary} />
+          </View>
+        ) : (
+          <View style={styles.emptyCart}>
+            <Ionicons
+              name="cube-outline"
+              size={32}
+              color={c.textMuted}
+            />
+            <Text style={styles.emptyTitle}>
+              {query ? 'No products match' : 'No products yet'}
+            </Text>
+          </View>
+        )
       }
     />
   );
@@ -430,12 +411,19 @@ function PosProductTile({ product, qty, onAdd, formatCurrency, c, styles }) {
   const low = product.stock > 0 && product.stock <= product.minStock;
   const multi = (product.units?.length || 0) > 1;
 
+  const borderTone = out
+    ? c.danger
+    : low
+      ? c.warning
+      : c.primary;
+
   return (
     <Pressable
       onPress={() => !out && onAdd(product)}
       disabled={out}
       style={({ pressed }) => [
         styles.tile,
+       { borderColor: borderTone, borderWidth: 1 },
         qty > 0 && styles.tileActive,
         pressed && !out && styles.tilePressed,
         out && styles.tileDisabled,
@@ -576,22 +564,22 @@ function FooterContent({
           <Ionicons name="cash-outline" size={24} color={c.textOnPrimary} />
           <Text style={styles.payBtnText}>Cash</Text>
         </Pressable>
-        <Pressable
-          onPress={onPayMpesa}
-          disabled={cartEmpty}
-          style={[
-            styles.payBtn,
-            styles.payBtnMpesa,
-            cartEmpty && styles.payBtnDisabled,
-          ]}
-        >
-          <Ionicons
-            name="phone-portrait-outline"
-            size={24}
-            color={c.textOnPrimary}
-          />
-          <Text style={styles.payBtnText}>M-Pesa</Text>
-        </Pressable>
+<Pressable
+  onPress={onPayMpesa}
+  disabled={cartEmpty}
+  style={[
+    styles.payBtn,
+    styles.payBtnMpesa,
+    cartEmpty && styles.payBtnDisabled,
+  ]}
+>
+  <Image
+    source={BRAND_ICONS.mpesa}
+    style={{ width: 24, height: 24, tintColor: '#FFFFFF' }}
+    resizeMode="contain"
+  />
+  <Text style={styles.payBtnText}>M-Pesa</Text>
+</Pressable>
       </View>
     </View>
   );
