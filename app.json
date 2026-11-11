@@ -57,7 +57,14 @@
       ],
       "@react-native-firebase/app",
       "@react-native-firebase/messaging",
-      "expo-sharing"
+      "expo-sharing",
+      [
+        "expo-notifications",
+        {
+          "icon": "./assets/assets/ic_stat.png",
+          "color": "#F04000"
+        }
+      ]
     ],
     "extra": {
       "eas": {
