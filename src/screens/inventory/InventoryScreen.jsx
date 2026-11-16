@@ -1230,3 +1230,4 @@ const makeStyles = (c) =>
       alignItems: 'center',
     },
   });
+  
