@@ -1,14 +1,24 @@
 // src/screens/auth/SelectOrganizationScreen.jsx
 //
-// Concept: same till-receipt language as LoginScreen. An accent-coloured hero sits
-// above a themed sheet with a torn top edge; the sheet slides up once on load.
-// Each business is a line item on the receipt.
+// v4 — the mascot is on this screen too (same kit as LoginScreen).
+//   Hero stage: brand row, speech bubble, mascot standing on the receipt's
+//   torn edge. The state of the screen IS the mascot's mood:
 //
-// v2: skeleton loader replaces the plain spinner. The skeleton mirrors the real
-// organization rows (logo → name bar → role pill → chevron), so there's zero
-// layout shift when the orgs resolve.
+//     loading          → thinking  "Opening your tills…"
+//     hard failure     → sad/offline, error text in the bubble, Retry below
+//     empty            → sad, info bubble
+//     list             → excited, greets by name
+//     picking a biz    → success pop "Let's go!"
+//
+//   - loadingOrgs && no orgs          → skeleton
+//   - !loadingOrgs && error && !orgs  → full offline/error state with Retry
+//   - !loadingOrgs && error && orgs   → inline stale banner, list still usable
+//   - !loadingOrgs && !error && !orgs → genuine "no businesses" state
+//   - !loadingOrgs && orgs            → list
+//
+// Uses OrganizationContext.refresh(). Local `retrying` gives button feedback.
 
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   View,
   Text,
@@ -18,6 +28,7 @@ import {
   ScrollView,
   Animated,
   Easing,
+  ActivityIndicator,
   useWindowDimensions,
 } from 'react-native';
 import {
@@ -29,6 +40,7 @@ import { useTheme, useThemedStyles } from '../../styles/ThemeProvider';
 import { useAuth } from '../../hooks/useAuth';
 import { useOrganizationContext } from '../../context/OrganizationContext';
 import { BRAND_ICONS } from '../../constants/config';
+import { MoodAvatar, SpeechBubble } from '../../components/kexie/MoodMascot';
 
 const TOOTH = 16;
 
@@ -36,9 +48,26 @@ function isOwnerOrg(org) {
   return Array.isArray(org?.permissions) && org.permissions.includes('*');
 }
 
+function classifyError(message) {
+  if (!message || typeof message !== 'string') return 'sad';
+  const m = message.toLowerCase();
+  if (
+    m.includes('network') ||
+    m.includes('timeout') ||
+    m.includes('timed out') ||
+    m.includes('reach') ||
+    m.includes('connect') ||
+    m.includes('server') ||
+    m.includes('offline') ||
+    m.includes('unavailable')
+  ) {
+    return 'offline';
+  }
+  return 'sad';
+}
+
 /* ── Skeleton primitives ─────────────────────────────────────────── */
 
-/** Single shimmering block. Opacity-only animation; cheap on all devices. */
 function Skeleton({ width, height, radius = 8, style }) {
   const pulse = useRef(new Animated.Value(0.45)).current;
   useEffect(() => {
@@ -71,7 +100,6 @@ function Skeleton({ width, height, radius = 8, style }) {
   );
 }
 
-/** Placeholder line item — mirrors the real organization row footprint. */
 function OrgRowSkeleton({ isFirst }) {
   const styles = useThemedStyles(makeStyles);
   return (
@@ -97,7 +125,6 @@ function OrgRowSkeleton({ isFirst }) {
   );
 }
 
-/** Whole-receipt placeholder: title bar + dashed rule + N rows + total line. */
 function OrgListSkeleton({ rows = 3 }) {
   const styles = useThemedStyles(makeStyles);
   return (
@@ -119,7 +146,6 @@ function OrgListSkeleton({ rows = 3 }) {
 
 /* ── Decorative pieces ──────────────────────────────────────────── */
 
-/** Row of triangles that gives the paper its torn top edge. */
 function TornEdge() {
   const styles = useThemedStyles(makeStyles);
   const { width } = useWindowDimensions();
@@ -140,10 +166,14 @@ function DashedRule({ style }) {
 
 /* ── Shell ──────────────────────────────────────────────────────── */
 
-function Shell({ headline, subhead, onSignOut, children }) {
+function Shell({ mood, bubbleText, bubbleTone = 'info', onSignOut, children }) {
   const { theme: c } = useTheme();
   const styles = useThemedStyles(makeStyles);
   const insets = useSafeAreaInsets();
+  const { width, height } = useWindowDimensions();
+
+  // Slightly smaller than Login's hero mascot — the list needs the room.
+  const avatarSize = Math.min(width * 0.42, height * 0.2, 170);
 
   const print = useRef(new Animated.Value(0)).current;
   useEffect(() => {
@@ -166,7 +196,6 @@ function Shell({ headline, subhead, onSignOut, children }) {
         showsVerticalScrollIndicator={false}
         bounces={false}
       >
-        {/* ── Hero ─────────────────────────────────── */}
         <View style={styles.hero}>
           <View style={styles.topRow}>
             <View style={styles.brandRow}>
@@ -198,11 +227,13 @@ function Shell({ headline, subhead, onSignOut, children }) {
             </TouchableOpacity>
           </View>
 
-          <Text style={styles.headline}>{headline}</Text>
-          <Text style={styles.subhead}>{subhead}</Text>
+          <View style={styles.bubbleWrap}>
+            <SpeechBubble text={bubbleText} tone={bubbleTone} />
+          </View>
+
+          <MoodAvatar mood={mood} size={avatarSize} />
         </View>
 
-        {/* ── Receipt ──────────────────────────────── */}
         <Animated.View
           style={[
             styles.receiptWrap,
@@ -240,22 +271,51 @@ export default function SelectOrganizationScreen() {
   const { theme: c } = useTheme();
   const styles = useThemedStyles(makeStyles);
   const { user, signOut } = useAuth();
-  const { organizations, setActiveOrganization, loadingOrgs, error } =
-    useOrganizationContext();
+  const {
+    organizations,
+    setActiveOrganization,
+    loadingOrgs,
+    refresh,
+    error,
+  } = useOrganizationContext();
+
+  const [retrying, setRetrying] = useState(false);
+  const [picking, setPicking] = useState(false);
 
   const handlePick = async (org) => {
-    await setActiveOrganization(org);
+    if (picking) return;
+    setPicking(true);
+    try {
+      await setActiveOrganization(org);
+    } finally {
+      setPicking(false);
+    }
+  };
+
+  const handleRetry = async () => {
+    if (retrying) return;
+    if (typeof refresh !== 'function') return; // defensive — never crash
+    setRetrying(true);
+    try {
+      await refresh();
+    } finally {
+      setRetrying(false);
+    }
   };
 
   const greetingName =
     user?.firstName || user?.name?.split?.(' ')?.[0] || 'there';
 
-  // ── Loading ───────────────────────────────────────────────
-  if (loadingOrgs) {
+  const hasOrgs = Array.isArray(organizations) && organizations.length > 0;
+  const errorText =
+    typeof error === 'string' && error.trim().length > 0 ? error : null;
+
+  // ── Loading (first load only) ─────────────────────────────
+  if (loadingOrgs && !hasOrgs) {
     return (
       <Shell
-        headline="Opening your tills."
-        subhead="Fetching the businesses linked to your account."
+        mood="thinking"
+        bubbleText="Opening your tills…"
         onSignOut={signOut}
       >
         <OrgListSkeleton rows={3} />
@@ -263,69 +323,141 @@ export default function SelectOrganizationScreen() {
     );
   }
 
-  // ── No org ────────────────────────────────────────────────
-  if (organizations.length === 0) {
+  // ── Hard failure, no data ─────────────────────────────────
+  if (!loadingOrgs && !hasOrgs && errorText) {
+    const mood = classifyError(errorText);
     return (
       <Shell
-        headline="No KxTill access."
-        subhead={`${user?.firstName ? `Hi ${user.firstName}. ` : ''}Your account isn't linked to a business yet.`}
+        mood={mood}
+        bubbleText={errorText}
+        bubbleTone="error"
         onSignOut={signOut}
       >
-        <Text style={styles.paperTitle}>Nothing to show</Text>
-        <DashedRule style={{ marginBottom: 18 }} />
-
-        {error ? (
-          <View style={styles.errorBox}>
-            <Ionicons name="alert-circle" size={18} color={c.danger} />
-            <Text style={styles.errorText}>{error}</Text>
-          </View>
-        ) : null}
-
-        <View style={styles.emptyIcon}>
-          <Ionicons name="shield-outline" size={32} color={c.textMuted} />
-        </View>
-        <Text style={styles.emptyText}>
-          Your account is not linked to any business with KxTill enabled.
-          Contact your administrator if this is unexpected.
+        <Text style={styles.paperTitle}>Businesses unavailable</Text>
+        <DashedRule style={{ marginBottom: 14 }} />
+        <Text style={styles.stateNote}>
+          {mood === 'offline'
+            ? "We can't reach KxTill. Check your connection and try again."
+            : 'We hit a snag loading your businesses.'}
         </Text>
 
         <TouchableOpacity
-          style={styles.primaryBtn}
+          style={[styles.primaryBtn, retrying && styles.disabled]}
+          onPress={handleRetry}
+          disabled={retrying}
+          activeOpacity={0.88}
+        >
+          {retrying ? (
+            <ActivityIndicator color={c.textOnPrimary} />
+          ) : (
+            <>
+              <Ionicons name="refresh" size={18} color={c.textOnPrimary} />
+              <Text style={styles.primaryBtnText}>Try again</Text>
+            </>
+          )}
+        </TouchableOpacity>
+
+        <TouchableOpacity
+          style={styles.secondaryBtn}
           onPress={signOut}
           activeOpacity={0.88}
         >
-          <Text style={styles.primaryBtnText}>Sign out</Text>
+          <Text style={styles.secondaryBtnText}>Sign out</Text>
         </TouchableOpacity>
       </Shell>
     );
   }
 
-  // ── Pick a business ───────────────────────────────────────
+  // ── Genuine empty ─────────────────────────────────────────
+  if (!loadingOrgs && !hasOrgs && !errorText) {
+    return (
+      <Shell
+        mood="sad"
+        bubbleText={`${user?.firstName ? `Hi ${user.firstName}. ` : ''}No business is linked to your account yet.`}
+        bubbleTone="info"
+        onSignOut={signOut}
+      >
+        <Text style={styles.paperTitle}>Nothing to show</Text>
+        <DashedRule style={{ marginBottom: 14 }} />
+        <Text style={styles.stateNote}>
+          Your account is not linked to any business with KxTill enabled.
+        </Text>
+
+        <TouchableOpacity
+          style={[styles.primaryBtn, retrying && styles.disabled]}
+          onPress={handleRetry}
+          disabled={retrying}
+          activeOpacity={0.88}
+        >
+          {retrying ? (
+            <ActivityIndicator color={c.textOnPrimary} />
+          ) : (
+            <>
+              <Ionicons name="refresh" size={18} color={c.textOnPrimary} />
+              <Text style={styles.primaryBtnText}>Refresh</Text>
+            </>
+          )}
+        </TouchableOpacity>
+
+        <TouchableOpacity
+          style={styles.secondaryBtn}
+          onPress={signOut}
+          activeOpacity={0.88}
+        >
+          <Text style={styles.secondaryBtnText}>Sign out</Text>
+        </TouchableOpacity>
+      </Shell>
+    );
+  }
+
+  // ── List (with stale banner when applicable) ──────────────
   return (
     <Shell
-      headline="Pick a business."
-      subhead={`Hi, ${greetingName}. Choose where you're working today.`}
+      mood={picking ? 'success' : 'idle'}
+      bubbleText={
+        picking
+          ? "Let's go!"
+          : `Hi, ${greetingName}! Where are you working today?`
+      }
       onSignOut={signOut}
     >
       <Text style={styles.paperTitle}>Choose a business</Text>
       <DashedRule style={{ marginBottom: 6 }} />
 
-      {error ? (
-        <View style={[styles.errorBox, { marginTop: 12 }]}>
-          <Ionicons name="alert-circle" size={18} color={c.danger} />
-          <Text style={styles.errorText}>{error}</Text>
+      {errorText ? (
+        <View style={styles.staleBanner}>
+          <Ionicons
+            name="cloud-offline-outline"
+            size={16}
+            color={c.textSecondary}
+          />
+          <Text style={styles.staleText} numberOfLines={2}>
+            Showing saved businesses · {errorText}
+          </Text>
+          <TouchableOpacity
+            onPress={handleRetry}
+            disabled={retrying}
+            hitSlop={8}
+            accessibilityLabel="Retry loading businesses"
+          >
+            {retrying ? (
+              <ActivityIndicator size="small" color={c.link} />
+            ) : (
+              <Ionicons name="refresh" size={16} color={c.link} />
+            )}
+          </TouchableOpacity>
         </View>
       ) : null}
 
       {organizations.map((item, index) => {
         const owner = isOwnerOrg(item);
         const initial = item.name?.trim()?.charAt(0)?.toUpperCase() || '?';
-const meta = [
-  item.country,
-  item.timezone?.split?.('/')?.[1]?.replaceAll?.('_', ' '),
-]
-  .filter(Boolean)
-  .join(' · ');
+        const meta = [
+          item.country,
+          item.timezone?.split?.('/')?.[1]?.replaceAll?.('_', ' '),
+        ]
+          .filter(Boolean)
+          .join(' · ');
 
         return (
           <View key={item.id}>
@@ -333,6 +465,7 @@ const meta = [
             <TouchableOpacity
               style={styles.row}
               onPress={() => handlePick(item)}
+              disabled={picking}
               activeOpacity={0.7}
             >
               {item.logo ? (
@@ -401,9 +534,9 @@ const meta = [
 
 const makeStyles = (c) => StyleSheet.create({
   safe: { flex: 1, backgroundColor: c.hero },
-  scroll: { flexGrow: 1, justifyContent: 'space-between' },
+  scroll: { flexGrow: 1, justifyContent: 'flex-start' },
+  disabled: { opacity: 0.6 },
 
-  // Background discs
   orbA: {
     position: 'absolute',
     top: -140,
@@ -425,13 +558,18 @@ const makeStyles = (c) => StyleSheet.create({
     opacity: 0.6,
   },
 
-  // Hero
-  hero: { paddingHorizontal: 24, paddingTop: 12, paddingBottom: 40 },
+  // zIndex lifts the mascot above the receipt so it overlaps the torn edge
+  hero: {
+    paddingHorizontal: 24,
+    paddingTop: 12,
+    zIndex: 2,
+    marginBottom: -22,
+  },
   topRow: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    marginBottom: 44,
+    marginBottom: 14,
   },
   brandRow: { flexDirection: 'row', alignItems: 'center' },
   logoChip: {
@@ -464,24 +602,9 @@ const makeStyles = (c) => StyleSheet.create({
   },
   scanChipText: { color: c.textOnPrimary, fontSize: 13, fontWeight: '600' },
 
-  headline: {
-    color: c.textOnPrimary,
-    fontSize: 40,
-    lineHeight: 42,
-    fontWeight: '900',
-    letterSpacing: -1.4,
-    maxWidth: 300,
-  },
-  subhead: {
-    color: c.onPrimaryMuted,
-    fontSize: 16,
-    lineHeight: 22,
-    marginTop: 12,
-    maxWidth: 300,
-  },
+  bubbleWrap: { alignItems: 'center', marginBottom: 14, minHeight: 56 },
 
-  // Receipt
-  receiptWrap: { width: '100%' },
+  receiptWrap: { width: '100%', zIndex: 1, flexGrow: 1 },
   edgeRow: {
     flexDirection: 'row',
     height: 10,
@@ -499,6 +622,7 @@ const makeStyles = (c) => StyleSheet.create({
     borderBottomColor: c.sheet,
   },
   paper: {
+    flexGrow: 1,
     backgroundColor: c.sheet,
     paddingHorizontal: 24,
     paddingTop: 18,
@@ -518,7 +642,6 @@ const makeStyles = (c) => StyleSheet.create({
     borderRadius: 1,
   },
 
-  // Line items
   row: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -577,7 +700,6 @@ const makeStyles = (c) => StyleSheet.create({
     justifyContent: 'center',
   },
 
-  // Total line
   totalRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
@@ -591,48 +713,61 @@ const makeStyles = (c) => StyleSheet.create({
   },
   totalValue: { color: c.textPrimary, fontSize: 15, fontWeight: '800' },
 
-  // Loading / empty
-  loadingBox: { paddingVertical: 24, alignItems: 'center' },
-  emptyIcon: {
-    width: 72,
-    height: 72,
-    borderRadius: 22,
-    backgroundColor: c.surfaceElevated,
-    alignItems: 'center',
-    justifyContent: 'center',
-    alignSelf: 'center',
-    marginBottom: 16,
-  },
-  emptyText: {
+  stateNote: {
     color: c.textSecondary,
     fontSize: 14,
-    lineHeight: 21,
-    textAlign: 'center',
-    marginBottom: 22,
+    lineHeight: 20,
+    marginBottom: 20,
   },
 
-  errorBox: {
+  staleBanner: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 8,
-    backgroundColor: c.dangerSoft,
+    backgroundColor: c.surfaceElevated,
     borderRadius: 10,
-    padding: 12,
-    marginBottom: 18,
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    marginTop: 12,
+    marginBottom: 4,
   },
-  errorText: { flex: 1, color: c.danger, fontSize: 13, fontWeight: '600' },
+  staleText: {
+    flex: 1,
+    color: c.textSecondary,
+    fontSize: 12,
+    fontWeight: '600',
+  },
 
   primaryBtn: {
     backgroundColor: c.primary,
     borderRadius: 14,
     minHeight: 54,
+    flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
+    gap: 8,
+    marginTop: 4,
   },
   primaryBtnText: {
     color: c.textOnPrimary,
     fontSize: 17,
     fontWeight: '800',
     letterSpacing: -0.2,
+  },
+
+  secondaryBtn: {
+    borderRadius: 14,
+    minHeight: 50,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginTop: 10,
+    borderWidth: 1,
+    borderColor: c.borderStrong,
+    backgroundColor: c.surfaceElevated,
+  },
+  secondaryBtnText: {
+    color: c.textPrimary,
+    fontSize: 15,
+    fontWeight: '700',
   },
 });

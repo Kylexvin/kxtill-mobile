@@ -1,8 +1,4 @@
 // src/services/api.js
-//
-// Single axios instance used by every service. AuthProvider wires the
-// interceptors at mount. Screens never import this file — they import
-// services, which import api.
 
 import axios from 'axios';
 import { config } from '../constants/config';
@@ -12,10 +8,8 @@ export const api = axios.create({
   timeout: 15000,
 });
 
-// Injected by AuthProvider on mount. Defaults do nothing (safe if a
-// request fires before AuthProvider has wired things up).
 let getAccessToken = () => null;
-let onRefreshNeeded = async () => null;   // returns new accessToken or null
+let onRefreshNeeded = async () => null;
 let onSessionExpired = () => {};
 
 export function configureApi({ getToken, refresh, expired }) {
@@ -26,39 +20,60 @@ export function configureApi({ getToken, refresh, expired }) {
 
 api.interceptors.request.use((req) => {
   const token = getAccessToken();
-  if (token) {
-    req.headers.Authorization = `Bearer ${token}`;
-  }
+  if (token) req.headers.Authorization = `Bearer ${token}`;
   return req;
 });
 
-// 401 → try to refresh once, retry the original request. If refresh
-// fails (or the retry also 401s), invoke session-expired. Never loop.
 api.interceptors.response.use(
   (res) => res,
   async (error) => {
-    const original = error.config || {};
-    const status = error.response?.status;
+    // ── NEW: normalise everything so callers always get an Error ──
+    const norm = toAuthError(error);
+    const original = norm.config || {};
+    const status = norm.response?.status;
 
-    // Do not attempt refresh on the refresh endpoint itself
-    // (would cause infinite recursion) or on auth endpoints.
     const isAuthEndpoint = /\/auth\/(login|refresh|logout|oauth\/token)/.test(
       original.url || ''
     );
 
     if (status === 401 && !original._retried && !isAuthEndpoint) {
       original._retried = true;
-      const newToken = await onRefreshNeeded();
-      if (newToken) {
-        original.headers = original.headers || {};
-        original.headers.Authorization = `Bearer ${newToken}`;
-        return api.request(original);
+      try {
+        const newToken = await onRefreshNeeded();
+        if (newToken) {
+          original.headers = original.headers || {};
+          original.headers.Authorization = `Bearer ${newToken}`;
+          return api.request(original);
+        }
+        onSessionExpired();
+      } catch {
+        onSessionExpired();
       }
-      onSessionExpired();
     }
 
-    return Promise.reject(error);
+    return Promise.reject(norm);
   }
 );
+
+// ── NEW helper ──────────────────────────────────────────────
+function toAuthError(error) {
+  // Always return an Error instance with .response?.data as an object.
+  if (error instanceof Error) {
+    if (error.response) {
+      const d = error.response.data;
+      if (typeof d === 'string') {
+        // HTML / plain-text body → coerce
+        error.response.data = { message: d.slice(0, 240) };
+      } else if (d == null || typeof d !== 'object') {
+        error.response.data = {};
+      }
+    }
+    return error;
+  }
+  // Non-Error reject (Hermes sometimes rejects with strings/undefined)
+  const e = new Error(typeof error === 'string' ? error : 'Request failed');
+  e.isSynthetic = true;
+  return e;
+}
 
 export default api;

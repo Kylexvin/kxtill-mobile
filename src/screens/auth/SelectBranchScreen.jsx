@@ -1,14 +1,24 @@
 // src/screens/auth/SelectBranchScreen.jsx
 //
-// Concept: same till-receipt language as LoginScreen / SelectOrganizationScreen.
-// Accent hero above a themed sheet with a torn top edge that slides up once on load.
-// Each branch is a line item on the receipt.
+// v4 — the mascot is on this screen too (same kit as LoginScreen).
+//   Hero stage: brand row (with back chip), speech bubble, mascot standing
+//   on the receipt's torn edge. State = mood:
 //
-// v2: skeleton loader replaces the plain spinner. The skeleton mirrors the
-// branch rows (paperTitle bar → dashed rule → three placeholder rows), so
-// there is no layout shift when data arrives.
+//     loading          → thinking  "Finding your branches…"
+//     hard failure     → sad/offline, error text in the bubble, Retry below
+//     empty            → sad, info bubble
+//     list             → excited, "Which branch?"
+//     picking a branch → success pop "Let's go!"
+//
+//   - loadingBranches && no branches    → skeleton
+//   - !loadingBranches && error && !br  → full offline/error state + Retry
+//   - !loadingBranches && error && br   → stale banner, list still usable
+//   - !loadingBranches && !error && !br → genuine "no branches" state
+//   - !loadingBranches && branches      → list
+//
+// Uses OrganizationContext.refresh(). Local `retrying` gives button feedback.
 
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   View,
   Text,
@@ -18,6 +28,7 @@ import {
   ScrollView,
   Animated,
   Easing,
+  ActivityIndicator,
   useWindowDimensions,
 } from 'react-native';
 import {
@@ -29,12 +40,30 @@ import { useTheme, useThemedStyles } from '../../styles/ThemeProvider';
 import { useAuth } from '../../hooks/useAuth';
 import { useOrganizationContext } from '../../context/OrganizationContext';
 import { BRAND_ICONS } from '../../constants/config';
+import { MoodAvatar, SpeechBubble } from '../../components/kexie/MoodMascot';
 
 const TOOTH = 16;
 
+function classifyError(message) {
+  if (!message || typeof message !== 'string') return 'sad';
+  const m = message.toLowerCase();
+  if (
+    m.includes('network') ||
+    m.includes('timeout') ||
+    m.includes('timed out') ||
+    m.includes('reach') ||
+    m.includes('connect') ||
+    m.includes('server') ||
+    m.includes('offline') ||
+    m.includes('unavailable')
+  ) {
+    return 'offline';
+  }
+  return 'sad';
+}
+
 /* ── Skeleton primitives ─────────────────────────────────────────── */
 
-/** Single shimmering block. Opacity-only animation; cheap on all devices. */
 function Skeleton({ width, height, radius = 8, style }) {
   const pulse = useRef(new Animated.Value(0.45)).current;
   useEffect(() => {
@@ -67,7 +96,6 @@ function Skeleton({ width, height, radius = 8, style }) {
   );
 }
 
-/** Placeholder line item — mirrors the real branch row footprint. */
 function BranchRowSkeleton({ isFirst }) {
   const styles = useThemedStyles(makeStyles);
   return (
@@ -90,7 +118,6 @@ function BranchRowSkeleton({ isFirst }) {
   );
 }
 
-/** Whole-receipt placeholder: title bar + dashed rule + three rows. */
 function BranchListSkeleton({ rows = 3 }) {
   return (
     <>
@@ -106,7 +133,6 @@ function BranchListSkeleton({ rows = 3 }) {
 
 /* ── Decorative pieces ──────────────────────────────────────────── */
 
-/** Row of triangles that gives the paper its torn top edge. */
 function TornEdge() {
   const styles = useThemedStyles(makeStyles);
   const { width } = useWindowDimensions();
@@ -127,10 +153,21 @@ function DashedRule({ style }) {
 
 /* ── Shell ──────────────────────────────────────────────────────── */
 
-function Shell({ headline, subhead, onBack, onSignOut, children }) {
+function Shell({
+  mood,
+  bubbleText,
+  bubbleTone = 'info',
+  onBack,
+  onSignOut,
+  children,
+}) {
   const { theme: c } = useTheme();
   const styles = useThemedStyles(makeStyles);
   const insets = useSafeAreaInsets();
+  const { width, height } = useWindowDimensions();
+
+  // Slightly smaller than Login's hero mascot — the list needs the room.
+  const avatarSize = Math.min(width * 0.42, height * 0.2, 170);
 
   const print = useRef(new Animated.Value(0)).current;
   useEffect(() => {
@@ -153,7 +190,6 @@ function Shell({ headline, subhead, onBack, onSignOut, children }) {
         showsVerticalScrollIndicator={false}
         bounces={false}
       >
-        {/* ── Hero ─────────────────────────────────── */}
         <View style={styles.hero}>
           <View style={styles.topRow}>
             <View style={styles.brandRow}>
@@ -163,6 +199,7 @@ function Shell({ headline, subhead, onBack, onSignOut, children }) {
                   onPress={onBack}
                   activeOpacity={0.8}
                   hitSlop={8}
+                  accessibilityLabel="Choose another business"
                 >
                   <Ionicons
                     name="arrow-back"
@@ -199,11 +236,13 @@ function Shell({ headline, subhead, onBack, onSignOut, children }) {
             </TouchableOpacity>
           </View>
 
-          <Text style={styles.headline}>{headline}</Text>
-          <Text style={styles.subhead}>{subhead}</Text>
+          <View style={styles.bubbleWrap}>
+            <SpeechBubble text={bubbleText} tone={bubbleTone} />
+          </View>
+
+          <MoodAvatar mood={mood} size={avatarSize} />
         </View>
 
-        {/* ── Receipt ──────────────────────────────── */}
         <Animated.View
           style={[
             styles.receiptWrap,
@@ -248,14 +287,26 @@ export default function SelectBranchScreen() {
     branches,
     setActiveBranch,
     loadingBranches,
+    refresh,
     error,
   } = useOrganizationContext();
 
-  const canGoBack = (organizations?.length || 0) > 1;
+  const [retrying, setRetrying] = useState(false);
+  const [picking, setPicking] = useState(false);
+
+  const hasBranches = Array.isArray(branches) && branches.length > 0;
+  const canGoBack = Array.isArray(organizations) && organizations.length > 1;
+  const errorText =
+    typeof error === 'string' && error.trim().length > 0 ? error : null;
 
   const handlePick = async (branch) => {
-    if (branch.isActive === false) return;
-    await setActiveBranch(branch);
+    if (picking || branch.isActive === false) return;
+    setPicking(true);
+    try {
+      await setActiveBranch(branch);
+    } finally {
+      setPicking(false);
+    }
   };
 
   const handleBack = async () => {
@@ -263,15 +314,25 @@ export default function SelectBranchScreen() {
     await setActiveOrganization(null);
   };
 
+  const handleRetry = async () => {
+    if (retrying) return;
+    if (typeof refresh !== 'function') return; // defensive
+    setRetrying(true);
+    try {
+      await refresh();
+    } finally {
+      setRetrying(false);
+    }
+  };
+
   const orgName = activeOrganization?.name || 'Business';
 
-  // ── Loading ───────────────────────────────────────────────
-  // Same Shell, but the paper shows a skeleton that mirrors the real rows.
-  if (loadingBranches) {
+  // ── Loading (first load only) ─────────────────────────────
+  if (loadingBranches && !hasBranches) {
     return (
       <Shell
-        headline="Finding your branches."
-        subhead={`Fetching branches for ${orgName}.`}
+        mood="thinking"
+        bubbleText="Finding your branches…"
         onBack={canGoBack ? handleBack : null}
         onSignOut={signOut}
       >
@@ -280,41 +341,47 @@ export default function SelectBranchScreen() {
     );
   }
 
-  const activeCount = branches.filter((b) => b.isActive !== false).length;
-
-  // ── Empty ─────────────────────────────────────────────────
-  if (branches.length === 0) {
+  // ── Hard failure, no data ─────────────────────────────────
+  if (!loadingBranches && !hasBranches && errorText) {
+    const mood = classifyError(errorText);
     return (
       <Shell
-        headline="No branches."
-        subhead={`You're not assigned to a branch in ${orgName}.`}
+        mood={mood}
+        bubbleText={errorText}
+        bubbleTone="error"
         onBack={canGoBack ? handleBack : null}
         onSignOut={signOut}
       >
-        <Text style={styles.paperTitle}>Nothing to show</Text>
-        <DashedRule style={{ marginBottom: 18 }} />
-
-        {error ? (
-          <View style={styles.errorBox}>
-            <Ionicons name="alert-circle" size={18} color={c.danger} />
-            <Text style={styles.errorText}>{error}</Text>
-          </View>
-        ) : null}
-
-        <View style={styles.emptyIcon}>
-          <Ionicons name="storefront-outline" size={32} color={c.textMuted} />
-        </View>
-        <Text style={styles.emptyText}>
-          You are not assigned to any branch in {orgName}. Ask the owner to add
-          you, then sign in again.
+        <Text style={styles.paperTitle}>Branches unavailable</Text>
+        <DashedRule style={{ marginBottom: 14 }} />
+        <Text style={styles.stateNote}>
+          {mood === 'offline'
+            ? "We can't reach KxTill. Check your connection and try again."
+            : 'We hit a snag loading your branches.'}
         </Text>
 
         <TouchableOpacity
-          style={styles.primaryBtn}
+          style={[styles.primaryBtn, retrying && styles.disabled]}
+          onPress={handleRetry}
+          disabled={retrying}
+          activeOpacity={0.88}
+        >
+          {retrying ? (
+            <ActivityIndicator color={c.textOnPrimary} />
+          ) : (
+            <>
+              <Ionicons name="refresh" size={18} color={c.textOnPrimary} />
+              <Text style={styles.primaryBtnText}>Try again</Text>
+            </>
+          )}
+        </TouchableOpacity>
+
+        <TouchableOpacity
+          style={styles.secondaryBtn}
           onPress={canGoBack ? handleBack : signOut}
           activeOpacity={0.88}
         >
-          <Text style={styles.primaryBtnText}>
+          <Text style={styles.secondaryBtnText}>
             {canGoBack ? 'Choose another business' : 'Sign out'}
           </Text>
         </TouchableOpacity>
@@ -322,14 +389,64 @@ export default function SelectBranchScreen() {
     );
   }
 
-  // ── Pick a branch ─────────────────────────────────────────
+  const activeCount = (branches || []).filter((b) => b.isActive !== false)
+    .length;
+
+  // ── Genuine empty (loaded, no error, zero branches) ───────
+  if (!loadingBranches && !hasBranches && !errorText) {
+    return (
+      <Shell
+        mood="sad"
+        bubbleText={`You're not assigned to any branch in ${orgName}.`}
+        bubbleTone="info"
+        onBack={canGoBack ? handleBack : null}
+        onSignOut={signOut}
+      >
+        <Text style={styles.paperTitle}>Nothing to show</Text>
+        <DashedRule style={{ marginBottom: 14 }} />
+        <Text style={styles.stateNote}>
+          Ask the owner to add you to a branch, then sign in again.
+        </Text>
+
+        <TouchableOpacity
+          style={[styles.primaryBtn, retrying && styles.disabled]}
+          onPress={handleRetry}
+          disabled={retrying}
+          activeOpacity={0.88}
+        >
+          {retrying ? (
+            <ActivityIndicator color={c.textOnPrimary} />
+          ) : (
+            <>
+              <Ionicons name="refresh" size={18} color={c.textOnPrimary} />
+              <Text style={styles.primaryBtnText}>Refresh</Text>
+            </>
+          )}
+        </TouchableOpacity>
+
+        <TouchableOpacity
+          style={styles.secondaryBtn}
+          onPress={canGoBack ? handleBack : signOut}
+          activeOpacity={0.88}
+        >
+          <Text style={styles.secondaryBtnText}>
+            {canGoBack ? 'Choose another business' : 'Sign out'}
+          </Text>
+        </TouchableOpacity>
+      </Shell>
+    );
+  }
+
+  // ── Pick a branch (with stale banner when applicable) ─────
   return (
     <Shell
-      headline="Which branch?"
-      subhead={
-        activeCount === 1
-          ? `One active branch in ${orgName}.`
-          : `${activeCount} active branches in ${orgName}.`
+      mood={picking ? 'success' : 'idle'}
+      bubbleText={
+        picking
+          ? "Let's go!"
+          : activeCount === 1
+            ? `One active branch in ${orgName}.`
+            : `Which branch? ${activeCount} active in ${orgName}.`
       }
       onBack={canGoBack ? handleBack : null}
       onSignOut={signOut}
@@ -337,10 +454,28 @@ export default function SelectBranchScreen() {
       <Text style={styles.paperTitle}>Choose a branch</Text>
       <DashedRule style={{ marginBottom: 6 }} />
 
-      {error ? (
-        <View style={[styles.errorBox, { marginTop: 12 }]}>
-          <Ionicons name="alert-circle" size={18} color={c.danger} />
-          <Text style={styles.errorText}>{error}</Text>
+      {errorText ? (
+        <View style={styles.staleBanner}>
+          <Ionicons
+            name="cloud-offline-outline"
+            size={16}
+            color={c.textSecondary}
+          />
+          <Text style={styles.staleText} numberOfLines={2}>
+            Showing saved branches · {errorText}
+          </Text>
+          <TouchableOpacity
+            onPress={handleRetry}
+            disabled={retrying}
+            hitSlop={8}
+            accessibilityLabel="Retry loading branches"
+          >
+            {retrying ? (
+              <ActivityIndicator size="small" color={c.link} />
+            ) : (
+              <Ionicons name="refresh" size={16} color={c.link} />
+            )}
+          </TouchableOpacity>
         </View>
       ) : null}
 
@@ -354,7 +489,7 @@ export default function SelectBranchScreen() {
             <TouchableOpacity
               style={[styles.row, inactive && styles.rowDisabled]}
               onPress={() => handlePick(item)}
-              disabled={inactive}
+              disabled={inactive || picking}
               activeOpacity={0.7}
             >
               <View style={styles.branchIcon}>
@@ -421,9 +556,9 @@ export default function SelectBranchScreen() {
 
 const makeStyles = (c) => StyleSheet.create({
   safe: { flex: 1, backgroundColor: c.hero },
-  scroll: { flexGrow: 1, justifyContent: 'space-between' },
+  scroll: { flexGrow: 1, justifyContent: 'flex-start' },
+  disabled: { opacity: 0.6 },
 
-  // Background discs
   orbA: {
     position: 'absolute',
     top: -140,
@@ -445,13 +580,18 @@ const makeStyles = (c) => StyleSheet.create({
     opacity: 0.6,
   },
 
-  // Hero
-  hero: { paddingHorizontal: 24, paddingTop: 12, paddingBottom: 40 },
+  // zIndex lifts the mascot above the receipt so it overlaps the torn edge
+  hero: {
+    paddingHorizontal: 24,
+    paddingTop: 12,
+    zIndex: 2,
+    marginBottom: -22,
+  },
   topRow: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    marginBottom: 44,
+    marginBottom: 14,
   },
   brandRow: { flexDirection: 'row', alignItems: 'center' },
   backChip: {
@@ -494,24 +634,9 @@ const makeStyles = (c) => StyleSheet.create({
   },
   scanChipText: { color: c.textOnPrimary, fontSize: 13, fontWeight: '600' },
 
-  headline: {
-    color: c.textOnPrimary,
-    fontSize: 40,
-    lineHeight: 42,
-    fontWeight: '900',
-    letterSpacing: -1.4,
-    maxWidth: 300,
-  },
-  subhead: {
-    color: c.onPrimaryMuted,
-    fontSize: 16,
-    lineHeight: 22,
-    marginTop: 12,
-    maxWidth: 300,
-  },
+  bubbleWrap: { alignItems: 'center', marginBottom: 14, minHeight: 56 },
 
-  // Receipt
-  receiptWrap: { width: '100%' },
+  receiptWrap: { width: '100%', zIndex: 1, flexGrow: 1 },
   edgeRow: {
     flexDirection: 'row',
     height: 10,
@@ -529,6 +654,7 @@ const makeStyles = (c) => StyleSheet.create({
     borderBottomColor: c.sheet,
   },
   paper: {
+    flexGrow: 1,
     backgroundColor: c.sheet,
     paddingHorizontal: 24,
     paddingTop: 18,
@@ -548,7 +674,6 @@ const makeStyles = (c) => StyleSheet.create({
     borderRadius: 1,
   },
 
-  // Line items
   row: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -626,7 +751,6 @@ const makeStyles = (c) => StyleSheet.create({
     justifyContent: 'center',
   },
 
-  // Total line
   totalRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
@@ -640,48 +764,61 @@ const makeStyles = (c) => StyleSheet.create({
   },
   totalValue: { color: c.textPrimary, fontSize: 15, fontWeight: '800' },
 
-  // Loading / empty
-  loadingBox: { paddingVertical: 24, alignItems: 'center' },
-  emptyIcon: {
-    width: 72,
-    height: 72,
-    borderRadius: 22,
-    backgroundColor: c.surfaceElevated,
-    alignItems: 'center',
-    justifyContent: 'center',
-    alignSelf: 'center',
-    marginBottom: 16,
-  },
-  emptyText: {
+  stateNote: {
     color: c.textSecondary,
     fontSize: 14,
-    lineHeight: 21,
-    textAlign: 'center',
-    marginBottom: 22,
+    lineHeight: 20,
+    marginBottom: 20,
   },
 
-  errorBox: {
+  staleBanner: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 8,
-    backgroundColor: c.dangerSoft,
+    backgroundColor: c.surfaceElevated,
     borderRadius: 10,
-    padding: 12,
-    marginBottom: 18,
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    marginTop: 12,
+    marginBottom: 4,
   },
-  errorText: { flex: 1, color: c.danger, fontSize: 13, fontWeight: '600' },
+  staleText: {
+    flex: 1,
+    color: c.textSecondary,
+    fontSize: 12,
+    fontWeight: '600',
+  },
 
   primaryBtn: {
     backgroundColor: c.primary,
     borderRadius: 14,
     minHeight: 54,
+    flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
+    gap: 8,
+    marginTop: 4,
   },
   primaryBtnText: {
     color: c.textOnPrimary,
     fontSize: 17,
     fontWeight: '800',
     letterSpacing: -0.2,
+  },
+
+  secondaryBtn: {
+    borderRadius: 14,
+    minHeight: 50,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginTop: 10,
+    borderWidth: 1,
+    borderColor: c.borderStrong,
+    backgroundColor: c.surfaceElevated,
+  },
+  secondaryBtnText: {
+    color: c.textPrimary,
+    fontSize: 15,
+    fontWeight: '700',
   },
 });

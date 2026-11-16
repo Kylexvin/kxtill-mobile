@@ -12,6 +12,10 @@
 //   - pairingContext is carried through applySession and restored on cold
 //     start, so OrganizationContext can honour the POS-side org/branch
 //     selection on first hydrate after pairing.
+//   - signIn / signInWithPairing / beginOAuth return the session on
+//     success and null on failure. They do NOT throw — callers read
+//     `error` from context. This removes the last place a promise
+//     rejection could escape an await inside a screen try/catch.
 
 import {
   createContext,
@@ -51,16 +55,19 @@ function extractQueryParam(url, key) {
 }
 
 function friendlyAuthError(e) {
-  return (
-    (e?.response?.data?.code === 'INVALID_CREDENTIALS' &&
-      'Email or password is incorrect') ||
-    (e?.response?.data?.code === 'EMAIL_NOT_VERIFIED' &&
-      'Email not verified. Check your inbox.') ||
-    e?.response?.data?.message ||
-    e?.response?.data?.error ||
+  const body = e?.response?.data;
+  const inner = body?.error && typeof body.error === 'object' ? body.error : null;
+  const code = inner?.code || body?.code;
+  const msg =
+    inner?.message ||
+    (typeof body?.error === 'string' ? body.error : null) ||
+    body?.message ||
     e?.message ||
-    'Sign in failed'
-  );
+    'Sign in failed';
+
+  if (code === 'INVALID_CREDENTIALS') return 'Email or password is incorrect';
+  if (code === 'EMAIL_NOT_VERIFIED') return 'Email not verified. Check your inbox.';
+  return msg;
 }
 
 export function AuthProvider({ children }) {
@@ -75,6 +82,10 @@ export function AuthProvider({ children }) {
   // Refs are the canonical token holders — the interceptor reads them.
   const accessTokenRef = useRef(null);
   const refreshTokenRef = useRef(null);
+
+  // Concurrency guard: ref, not state. A state-based guard is subject to
+  // React batching and can be stale during a fast double-tap.
+  const submittingRef = useRef(false);
 
   // Pairing context: a one-shot hint from the POS. OrganizationContext
   // consumes it during its first hydrate and it is not re-used.
@@ -168,31 +179,33 @@ export function AuthProvider({ children }) {
     authService.logoutAll().catch(() => {});
   }, [clearLocalSession]);
 
+  // signIn: returns session on success, null on failure. Never throws —
+  // the LoginScreen reads `error` from context instead.
   const signIn = useCallback(
     async (email, password) => {
-      if (isSubmitting) return null;
+      if (submittingRef.current) return null;
+      submittingRef.current = true;
       setError(null);
       setIsSubmitting(true);
       try {
         const session = await authService.login(email, password);
-        if (!session?.accessToken || !session?.refreshToken) {
-          throw new Error('Invalid response from server');
-        }
         await applySession(session);
         return session;
       } catch (e) {
         setError(friendlyAuthError(e));
-        throw e;
+        return null;
       } finally {
+        submittingRef.current = false;
         setIsSubmitting(false);
       }
     },
-    [applySession, isSubmitting]
+    [applySession]
   );
 
   const signInWithPairing = useCallback(
     async (token) => {
-      if (isSubmitting) return null;
+      if (submittingRef.current) return null;
+      submittingRef.current = true;
       setError(null);
       setIsSubmitting(true);
       try {
@@ -204,20 +217,23 @@ export function AuthProvider({ children }) {
         return session;
       } catch (e) {
         setError(friendlyAuthError(e));
-        throw e;
+        return null;
       } finally {
+        submittingRef.current = false;
         setIsSubmitting(false);
       }
     },
-    [applySession, isSubmitting]
+    [applySession]
   );
 
   const beginOAuth = useCallback(
     async (provider = 'oauth') => {
       if (!config.oauthEnabled) {
-        throw new Error('OAuth is not enabled in this build');
+        setError('OAuth is not enabled in this build');
+        return null;
       }
-      if (isSubmitting) return null;
+      if (submittingRef.current) return null;
+      submittingRef.current = true;
       setError(null);
       setIsSubmitting(true);
       try {
@@ -227,7 +243,9 @@ export function AuthProvider({ children }) {
           config.redirectUri
         );
 
-        if (result.type === 'cancel' || result.type === 'dismiss') return null;
+        if (result.type === 'cancel' || result.type === 'dismiss') {
+          return null;
+        }
         if (result.type !== 'success' || !result.url) {
           throw new Error('Sign in was interrupted');
         }
@@ -238,17 +256,17 @@ export function AuthProvider({ children }) {
         if (!code) throw new Error('No authorization code returned');
 
         const session = await authService.exchangeCode(code);
-        if (!session?.accessToken) throw new Error('Token exchange failed');
         await applySession(session);
         return session;
       } catch (e) {
         setError(friendlyAuthError(e));
-        throw e;
+        return null;
       } finally {
+        submittingRef.current = false;
         setIsSubmitting(false);
       }
     },
-    [applySession, isSubmitting]
+    [applySession]
   );
 
   // ── API interceptor — install ONCE ─────────────────────────
@@ -264,17 +282,15 @@ export function AuthProvider({ children }) {
         const rt = refreshTokenRef.current;
         if (!rt) return null;
         try {
-          const { accessToken: newToken, refreshToken: newRt } =
+          const { accessToken: newToken } =
             await authService.refresh(rt);
           if (!newToken) return null;
-          setTokens(newToken, newRt ?? rt);
-          patchPersistedUser({
-            accessToken: newToken,
-            refreshToken: newRt ?? rt,
-          });
+          // Server does not rotate the refresh token.
+          setTokens(newToken, rt);
+          patchPersistedUser({ accessToken: newToken });
           return newToken;
         } catch (err) {
-          if (!err?.response) return null;
+          if (!err?.response) return null; // network blip → let the caller 401
           await forceSignOutRef.current();
           return null;
         }

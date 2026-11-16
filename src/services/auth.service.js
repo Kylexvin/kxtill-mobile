@@ -2,7 +2,7 @@
 //
 // Wraps every auth-related backend call.
 // Two server shapes coexist:
-//   POST /api/v1/auth/login     -> camelCase { accessToken, refreshToken, ... }
+//   POST /api/v1/auth/login       -> camelCase { accessToken, refreshToken, ... }
 //   POST /api/v1/auth/oauth/token -> snake_case { access_token, refresh_token, ... }
 // Both are normalized to camelCase so the rest of the app is uniform.
 //
@@ -13,12 +13,33 @@
 import { api } from './api';
 import { config } from '../constants/config';
 
-const normalizeLogin = (data = {}) => ({
-  user: data.user || null,
-  accessToken: data.accessToken || data.access_token || null,
-  refreshToken: data.refreshToken || data.refresh_token || null,
-  organizations: data.organizations || [],
-});
+/* ── normalisation ───────────────────────────────────────────── */
+
+const normalizeLogin = (data) => {
+  const d = data && typeof data === 'object' ? data : {};
+  return {
+    user: d.user || null,
+    accessToken: d.accessToken || d.access_token || null,
+    refreshToken: d.refreshToken || d.refresh_token || null,
+    organizations: Array.isArray(d.organizations) ? d.organizations : [],
+  };
+};
+
+/**
+ * Enforce the token contract at the service boundary so callers
+ * (AuthContext) never receive a half-built session.
+ * Throws an Error with code BAD_RESPONSE when the server says 2xx but
+ * the body is missing tokens — that case is what usually surfaces as
+ * "Invalid response from server" downstream.
+ */
+function assertSession(session) {
+  if (!session?.accessToken || !session?.refreshToken) {
+    const e = new Error('Invalid response from server');
+    e.code = 'BAD_RESPONSE';
+    throw e;
+  }
+  return session;
+}
 
 function toQuery(params) {
   return Object.entries(params)
@@ -27,16 +48,22 @@ function toQuery(params) {
     .join('&');
 }
 
+/* ── password login ──────────────────────────────────────────── */
+
 export async function login(email, password) {
   const { data } = await api.post('/api/v1/auth/login', { email, password });
-  return normalizeLogin(data);
+  return assertSession(normalizeLogin(data));
 }
+
+/* ── token refresh ───────────────────────────────────────────── */
 
 export async function refresh(refreshToken) {
   const { data } = await api.post('/api/v1/auth/refresh', { refreshToken });
   // Server returns { accessToken } only — no new refresh token.
-  return { accessToken: data.accessToken || data.access_token || null };
+  return { accessToken: data?.accessToken || data?.access_token || null };
 }
+
+/* ── logout ──────────────────────────────────────────────────── */
 
 export async function logout(refreshToken) {
   try {
@@ -54,10 +81,14 @@ export async function logoutAll() {
   }
 }
 
+/* ── profile ─────────────────────────────────────────────────── */
+
 export async function getMe() {
   const { data } = await api.get('/api/v1/auth/me');
   return data;
 }
+
+/* ── oauth ───────────────────────────────────────────────────── */
 
 export function buildAuthorizeUrl(provider = 'oauth') {
   const path =
@@ -78,7 +109,7 @@ export async function exchangeCode(code) {
     code,
     client_id: config.clientId,
   });
-  return normalizeLogin(data); // server uses snake_case; normalizer handles it
+  return assertSession(normalizeLogin(data)); // server uses snake_case; normalizer handles it
 }
 
 export default {
