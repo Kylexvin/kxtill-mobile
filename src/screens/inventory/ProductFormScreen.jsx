@@ -41,12 +41,15 @@ import { useTheme } from '../../styles/ThemeProvider';
 import { spacing, radius } from '../../styles/spacing';
 import { typography } from '../../styles/typography';
 import { useOrganizationContext } from '../../context/OrganizationContext';
+import useVertical from '../../hooks/useVertical';
 import { usePermissionsContext } from '../../context/PermissionsContext';
 import { useSettings } from '../../context/SettingsContext';
 import inventoryService from '../../services/inventory.service';
 import { KXTILL } from '../../constants/permissions';
 
 /* ── constants ──────────────────────────────────────────────── */
+
+const STEP1_FIELDS = ['name', 'category', 'price', 'unitName', 'unitAbbr'];
 
 const BLANK = {
   name: '',
@@ -388,7 +391,13 @@ export default function ProductFormScreen({ route, navigation }) {
   const { theme: c } = useTheme();
   const styles = useMemo(() => makeStyles(c), [c]);
   const insets = useSafeAreaInsets();
-  const { activeOrganization, productInstances } = useOrganizationContext();
+  const { activeOrganization } = useOrganizationContext();
+  const {
+    ready: verticalReady,
+    failed: verticalFailed,
+    retry: retryVertical,
+    isPharmacy: isPharmacyOrg,
+  } = useVertical();
   const { can } = usePermissionsContext();
   const { getCurrency } = useSettings();
 
@@ -396,10 +405,6 @@ export default function ProductFormScreen({ route, navigation }) {
   const initial = route.params?.product || null;
   const initialBarcode = route.params?.initialBarcode || null;
 
-  const isPharmacyOrg = useMemo(
-    () => productInstances?.some((i) => i.vertical === 'pharmacy'),
-    [productInstances]
-  );
   const canCreate = can(KXTILL.INVENTORY.CREATE);
   const canUpdate = can(KXTILL.INVENTORY.UPDATE);
   const allowed = mode === 'create' ? canCreate : canUpdate;
@@ -434,6 +439,15 @@ const [form, setForm] = useState(() => {
   const [err, setErr] = useState(null);
   const [fieldErrors, setFieldErrors] = useState({});
   const [toast, setToast] = useState(null);
+
+  // In a pharmacy org, new products default to medicine (once).
+  const medicineDefaultedRef = useRef(false);
+  useEffect(() => {
+    if (mode !== 'create' || !verticalReady || !isPharmacyOrg) return;
+    if (medicineDefaultedRef.current) return;
+    medicineDefaultedRef.current = true;
+    setForm((f) => ({ ...f, isMedicine: true }));
+  }, [mode, verticalReady, isPharmacyOrg]);
 
   const set = (k, v) => {
     setForm((f) => ({ ...f, [k]: v }));
@@ -495,9 +509,9 @@ const [form, setForm] = useState(() => {
 
   const ringProgress = completion;
 
-  const validateAll = () => {
+  const validateAll = (fields = requiredFields) => {
     const errs = {};
-    for (const k of requiredFields) {
+    for (const k of fields) {
       const check = validateField(k);
       if (check) errs[k] = check;
     }
@@ -539,7 +553,7 @@ const [form, setForm] = useState(() => {
   };
 
   const onContinue = () => {
-    if (!validateAll()) return;
+    if (!validateAll(STEP1_FIELDS)) return;
     if (form.isMedicine && isPharmacyOrg) {
       setStep(2);
     } else {
@@ -614,6 +628,37 @@ const [form, setForm] = useState(() => {
       }
     }
   };
+
+  if (!verticalReady) {
+    return (
+      <SafeAreaView style={styles.safe} edges={['top', 'bottom']}>
+        <View style={styles.denied}>
+          {verticalFailed ? (
+            <>
+              <Ionicons
+                name="cloud-offline-outline"
+                size={40}
+                color={c.textMuted}
+              />
+              <Text style={styles.deniedTitle}>
+                Can't load business type
+              </Text>
+              <Text style={styles.deniedSub}>
+                Check your connection and try again.
+              </Text>
+              <Pressable onPress={retryVertical} style={styles.deniedBtn}>
+                <Text style={{ color: c.textOnPrimary, fontWeight: '800' }}>
+                  Retry
+                </Text>
+              </Pressable>
+            </>
+          ) : (
+            <ActivityIndicator color={c.primary} />
+          )}
+        </View>
+      </SafeAreaView>
+    );
+  }
 
   if (!allowed) {
     return (
@@ -945,23 +990,22 @@ const [form, setForm] = useState(() => {
                   />
                 </Field>
 
-                {isPharmacyOrg ? (
+                {isPharmacyOrg && mode === 'create' ? (
                   <Pressable
                     onPress={toggleMedicine}
                     style={styles.toggleRow}
                   >
                     <View style={{ flex: 1 }}>
-                      <Text style={styles.toggleTitle}>
-                        This is a medicine
-                      </Text>
+                      <Text style={styles.toggleTitle}>Not a medicine</Text>
                       <Text style={styles.toggleSub}>
-                        Adds pharmacy details (generic, strength, form)
+                        For items like sanitary pads. Sold from direct
+                        stock, no batch or expiry.
                       </Text>
                     </View>
                     <Ionicons
-                      name={form.isMedicine ? 'checkbox' : 'square-outline'}
+                      name={!form.isMedicine ? 'checkbox' : 'square-outline'}
                       size={22}
-                      color={form.isMedicine ? c.primary : c.textMuted}
+                      color={!form.isMedicine ? c.primary : c.textMuted}
                     />
                   </Pressable>
                 ) : null}

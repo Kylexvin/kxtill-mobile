@@ -70,6 +70,9 @@ export function OrganizationProvider({ children }) {
   const [activeBranch, setActiveBranchState] = useState(null);
   const [viewBranchId, setViewBranchIdState] = useState(null);
   const [productInstances, setProductInstances] = useState([]);
+  const [instancesOrgId, setInstancesOrgId] = useState(null);
+  const [instancesFailed, setInstancesFailed] = useState(false);
+  const [instancesNonce, setInstancesNonce] = useState(0);
   const [loadingOrgs, setLoadingOrgs] = useState(false);
   const [loadingBranches, setLoadingBranches] = useState(false);
   const [loadingInstances, setLoadingInstances] = useState(false);
@@ -99,6 +102,8 @@ export function OrganizationProvider({ children }) {
       setActiveBranchState(null);
       setViewBranchIdState(null);
       setProductInstances([]);
+      setInstancesOrgId(null);
+      setInstancesFailed(false);
       setError(null);
       setLoadingOrgs(false);
       setLoadingBranches(false);
@@ -285,16 +290,21 @@ export function OrganizationProvider({ children }) {
   }, [status, activeOrgId]);
 
   // ── Product instances (verticals) whenever ORG changes ─────
+  // ── Product instances (verticals) whenever ORG changes ─────
+  // Cached per org so the vertical is still known when offline.
   useEffect(() => {
     if (status !== 'signedIn') return;
     if (!activeOrgId) {
       setProductInstances([]);
+      setInstancesOrgId(null);
+      setInstancesFailed(false);
       setLoadingInstances(false);
       return;
     }
 
     let cancelled = false;
     setLoadingInstances(true);
+    setInstancesFailed(false);
     (async () => {
       try {
         const { data } = await api.get(
@@ -306,9 +316,23 @@ export function OrganizationProvider({ children }) {
         const instances = (kxtill?.instances || []).filter(
           (i) => i.isActive
         );
-        if (!cancelled) setProductInstances(instances);
+        if (cancelled) return;
+        setProductInstances(instances);
+        setInstancesOrgId(activeOrgId);
+        writeStored({ instancesOrgId: activeOrgId, instances });
       } catch {
-        if (!cancelled) setProductInstances([]);
+        const stored = await readStored();
+        if (cancelled) return;
+        if (
+          stored?.instancesOrgId === activeOrgId &&
+          Array.isArray(stored.instances)
+        ) {
+          setProductInstances(stored.instances);
+          setInstancesOrgId(activeOrgId);
+        } else {
+          setProductInstances([]);
+          setInstancesFailed(true);
+        }
       } finally {
         if (!cancelled) setLoadingInstances(false);
       }
@@ -317,7 +341,7 @@ export function OrganizationProvider({ children }) {
     return () => {
       cancelled = true;
     };
-  }, [status, activeOrgId]);
+  }, [status, activeOrgId, instancesNonce]);
 
   // ── Hydration gate (monotonic) ─────────────────────────────
   //
@@ -458,6 +482,14 @@ export function OrganizationProvider({ children }) {
     }
   }, [status, loginOrgs, activeOrgId]);
 
+  // True only once the instances for the CURRENT org have been resolved
+  // (from network or cache). Until then the vertical is unknown.
+  const instancesReady = !!activeOrgId && instancesOrgId === activeOrgId;
+  const retryInstances = useCallback(
+    () => setInstancesNonce((n) => n + 1),
+    []
+  );
+
   const value = useMemo(
     () => ({
       organizations,
@@ -472,6 +504,9 @@ export function OrganizationProvider({ children }) {
       loadingOrgs,
       loadingBranches,
       loadingInstances,
+      instancesReady,
+      instancesFailed,
+      retryInstances,
       ready,
       error,
       refresh,
@@ -490,6 +525,9 @@ export function OrganizationProvider({ children }) {
       loadingOrgs,
       loadingBranches,
       loadingInstances,
+      instancesReady,
+      instancesFailed,
+      retryInstances,
       ready,
       error,
       refresh,

@@ -2,7 +2,7 @@
   "expo": {
     "name": "KxTill",
     "slug": "kxtill-mobile",
-    "version": "1.0.0",
+    "version": "1.0.1",
     "orientation": "portrait",
     "scheme": "kxtill",
     "userInterfaceStyle": "automatic",
@@ -14,6 +14,7 @@
     },
     "android": {
       "package": "co.ke.kxbyte.kxtill",
+      "versionCode": 2,
       "googleServicesFile": "./google-services.json",
       "icon": "./assets/images/icon.png",
       "permissions": [
