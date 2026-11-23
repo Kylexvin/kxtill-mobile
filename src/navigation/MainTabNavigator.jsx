@@ -18,6 +18,8 @@ import { useOrganizationContext } from '../context/OrganizationContext';
 import { usePermissionsContext } from '../context/PermissionsContext';
 import { KXTILL } from '../constants/permissions';
 import { goToBusinessScreen } from './helpers';
+import useWriteAccess from '../hooks/useWriteAccess';
+import SubscriptionBanner from '../components/subscription/SubscriptionBanner';
 
 const Tab = createBottomTabNavigator();
 
@@ -31,6 +33,7 @@ const HIDE_TAB_BAR_ROUTES = new Set([ROUTES.POS, ROUTES.BARCODE_SCANNER]);
 export default function MainTabNavigator() {
   const { activeBranch } = useOrganizationContext();
   const { can } = usePermissionsContext();
+  const { canWrite, notify } = useWriteAccess();
 
   const handleArcAction = (item) => {
     if (!item) return;
@@ -42,6 +45,10 @@ export default function MainTabNavigator() {
             'Not available',
             'You do not have permission to use POS.'
           );
+          break;
+        }
+        if (!canWrite) {
+          notify();
           break;
         }
         goToBusinessScreen(navigationRef.dispatch, ROUTES.POS, {
@@ -99,7 +106,12 @@ export default function MainTabNavigator() {
               return null;
             }
 
-            return <CustomTabBar {...props} />;
+            return (
+              <View>
+                <SubscriptionBanner />
+                <CustomTabBar {...props} />
+              </View>
+            );
           }}
         >
           <Tab.Screen name={ROUTES.TAB_HOME} component={DashboardScreen} />

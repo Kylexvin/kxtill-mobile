@@ -8,6 +8,11 @@ import { AuthProvider, useAuthContext } from './src/context/AuthContext';
 import { OrganizationProvider, useOrganizationContext } from './src/context/OrganizationContext';
 import { SettingsProvider } from './src/context/SettingsContext';
 import { PermissionsProvider } from './src/context/PermissionsContext';
+import {
+  SubscriptionProvider,
+  useSubscription,
+} from './src/context/SubscriptionContext';
+import { configureApi } from './src/services/api';
 import RootNavigator from './src/navigation/RootNavigator';
 import fcmService from './src/services/fcm.service';
 console.log({
@@ -28,6 +33,22 @@ function FcmBootstrap() {
   return null;
 }
 
+function SubscriptionBridge() {
+  const { refresh } = useSubscription();
+
+  useEffect(() => {
+    // When the server rejects an action for subscription reasons,
+    // re-check the plan immediately.
+    configureApi({
+      subscriptionBlocked: () => {
+        refresh();
+      },
+    });
+  }, [refresh]);
+
+  return null;
+}
+
 export default function App() {
   return (
     <ThemeProvider>
@@ -38,8 +59,11 @@ export default function App() {
               <OrganizationProvider>
                 <SettingsProvider>
                   <PermissionsProvider>
-                    <FcmBootstrap />
-                    <RootNavigator />
+                    <SubscriptionProvider>
+                      <SubscriptionBridge />
+                      <FcmBootstrap />
+                      <RootNavigator />
+                    </SubscriptionProvider>
                   </PermissionsProvider>
                 </SettingsProvider>
               </OrganizationProvider>

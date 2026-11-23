@@ -17,6 +17,7 @@ import InventoryScreen from '../screens/inventory/InventoryScreen';
 import ProductFormScreen from '../screens/inventory/ProductFormScreen';
 import ProductDetailScreen from '../screens/inventory/ProductDetailScreen';
 import PosScreen from '../screens/pos/PosScreen';
+import withWriteGate from './withWriteGate';
 
 import BarcodeToolsScreen from '../screens/branches/barcode/BarcodeToolsScreen';
 import BarcodeScannerScreen from '../screens/branches/barcode/BarcodeScannerScreen';
@@ -24,6 +25,13 @@ import BarcodeGenerateScreen from '../screens/branches/barcode/BarcodeGenerateSc
 import BarcodeLabelsScreen from '../screens/branches/barcode/BarcodeLabelsScreen';
 
 const Stack = createNativeStackNavigator();
+
+// Write-only screens: unreachable when the plan is read-only.
+// Wrapped once at module level so the component identity is stable.
+const GatedProductForm = withWriteGate(ProductFormScreen, {
+  title: 'Product editing',
+});
+const GatedPos = withWriteGate(PosScreen, { title: 'POS' });
 
 /**
  * Auto-root guard.
@@ -83,7 +91,7 @@ export default function BranchesStack() {
       >
         {({ route, navigation }) => (
           <AutoRoot>
-            <ProductFormScreen route={route} navigation={navigation} />
+            <GatedProductForm route={route} navigation={navigation} />
           </AutoRoot>
         )}
       </Stack.Screen>
@@ -94,7 +102,7 @@ export default function BranchesStack() {
       >
         {({ route, navigation }) => (
           <AutoRoot>
-            <PosScreen route={route} navigation={navigation} />
+            <GatedPos route={route} navigation={navigation} />
           </AutoRoot>
         )}
       </Stack.Screen>
