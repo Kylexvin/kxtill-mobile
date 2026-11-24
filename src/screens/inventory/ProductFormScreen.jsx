@@ -1001,8 +1001,7 @@ const [form, setForm] = useState(() => {
                         For items like sanitary pads. Sold from direct
                         stock, no batch or expiry.
                       </Text>
-                    </View>
-                    
+                    </View>                    
                     <Ionicons
                       name={!form.isMedicine ? 'checkbox' : 'square-outline'}
                       size={22}
