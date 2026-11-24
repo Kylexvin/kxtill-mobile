@@ -14,7 +14,7 @@
     },
     "android": {
       "package": "co.ke.kxbyte.kxtill",
-      "versionCode": 2,
+      "versionCode": 3,
       "googleServicesFile": "./google-services.json",
       "icon": "./assets/images/icon.png",
       "permissions": [
