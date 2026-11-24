@@ -1002,6 +1002,7 @@ const [form, setForm] = useState(() => {
                         stock, no batch or expiry.
                       </Text>
                     </View>
+                    
                     <Ionicons
                       name={!form.isMedicine ? 'checkbox' : 'square-outline'}
                       size={22}
